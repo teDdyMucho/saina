@@ -6,6 +6,7 @@ import EmployeeRegister from './features/auth/EmployeeRegister'
 import { EmployeeHome } from './features/employee/EmployeeHome'
 import { Timesheet } from './features/employee/Timesheet'
 import { LeaveRequest } from './features/employee/LeaveRequest'
+import SelfieCapture from './features/employee/SelfieCapture'
 import { AdminDashboardPage } from './features/admin/AdminDashboardPage'
 import { Schedules } from './features/admin/Schedules'
 import { Approvals } from './features/admin/Approvals'
@@ -69,6 +70,15 @@ function App() {
               <Layout>
                 <EmployeeHome />
               </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/employee/selfie"
+          element={
+            <ProtectedRoute requireRole="employee">
+              {/* Standalone capture without layout for cleaner mobile UI */}
+              <SelfieCapture />
             </ProtectedRoute>
           }
         />

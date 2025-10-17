@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -7,9 +7,14 @@ import { Clock, MapPin, Camera, QrCode, Coffee, LogOut as LogOutIcon, CheckCircl
 import { formatTime } from '@/lib/utils'
 import { getCurrentPosition, isWithinGeofence } from '@/lib/geo'
 import { motion } from 'framer-motion'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useNavigate } from 'react-router-dom'
 
 export function EmployeeHome() {
   const { currentSession, isOnBreak, clockIn, clockOut, startBreak, endBreak } = useAttendanceStore()
+  const { user } = useAuthStore()
+  const navigate = useNavigate()
   const [currentTime, setCurrentTime] = useState(new Date())
   const [elapsedTime, setElapsedTime] = useState('00:00:00')
   const [isCapturing, setIsCapturing] = useState(false)
@@ -18,16 +23,66 @@ export function EmployeeHome() {
   const [selfieReady, setSelfieReady] = useState(false)
   const [cameraBlocked, setCameraBlocked] = useState(false)
   const [geoError, setGeoError] = useState<string | null>(null)
-
-  // Mock shift data
-  const shift = {
-    startTime: '09:00 AM',
-    endTime: '05:00 PM',
+  const [selfieDataUrl, setSelfieDataUrl] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [shift, setShift] = useState({
+    startTime: '--',
+    endTime: '--',
     location: 'Main Office',
     lat: 40.7128,
     lng: -74.0060,
     radiusMeters: 100,
-  }
+  })
+
+  // Load today's shift for logged-in user by username (fallback to full name)
+  useEffect(() => {
+    const fetchToday = async () => {
+      if (!user) return
+      const username = user.email // in our auth store, identifier holds username
+      const fullName = user.name
+      const today = new Date()
+      const yyyy = today.getFullYear()
+      const mm = String(today.getMonth() + 1).padStart(2, '0')
+      const dd = String(today.getDate()).padStart(2, '0')
+      const todayStr = `${yyyy}-${mm}-${dd}`
+
+      // Find schedule where user_name matches username OR employee_name matches full name
+      const { data: schedules, error } = await supabase
+        .from('schedule')
+        .select('id, shift_name, start_date, end_date, employee_name, user_name, created_at')
+        .or(`user_name.eq.${username},employee_name.eq.${fullName}`)
+        .order('created_at', { ascending: false })
+
+      if (error || !schedules || schedules.length === 0) return
+
+      // Pick first active schedule covering today
+      const active = schedules.find((s: any) => {
+        const startOk = !s.start_date || s.start_date <= todayStr
+        const endOk = !s.end_date || s.end_date >= todayStr
+        return startOk && endOk
+      }) || schedules[0]
+
+      if (!active?.shift_name) return
+
+      const { data: tmpl } = await supabase
+        .from('template')
+        .select('start_time, end_time, break_time, grace, days')
+        .eq('shift_name', active.shift_name)
+        .maybeSingle()
+
+      if (tmpl) {
+        setShift((prev) => ({
+          ...prev,
+          startTime: tmpl.start_time ?? prev.startTime,
+          endTime: tmpl.end_time ?? prev.endTime,
+        }))
+      }
+    }
+    fetchToday()
+  }, [user])
+
+  // Inline camera is disabled; use dedicated capture route instead
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -50,19 +105,32 @@ export function EmployeeHome() {
   const handleClockIn = async () => {
     setIsCapturing(true)
     try {
-      // Simulate selfie capture
-      await new Promise((resolve) => setTimeout(resolve, 600))
+      // Navigate to the capture route in the same tab
+      navigate('/employee/selfie')
+      return
+    } catch (error) {
+      console.error('Clock in navigation error:', error)
+      setGeoError('Unable to open selfie capture')
+    } finally {
+      setIsCapturing(false)
+    }
+  }
+
+  // After returning from the capture route, if selfie + geo exist in localStorage, complete clock-in
+  useEffect(() => {
+    const selfie = localStorage.getItem('selfieDataUrl')
+    const geo = localStorage.getItem('lastGeo')
+    if (!selfie || !geo) return
+    try {
+      const { lat, lng } = JSON.parse(geo)
+      setSelfieDataUrl(selfie)
       setSelfieReady(true)
-      
-      // Get GPS location
-      const position = await getCurrentPosition()
-      const { latitude, longitude } = position.coords
       setGpsLocked(true)
-      
+
       // Check geofence
       const withinGeofence = isWithinGeofence(
-        latitude,
-        longitude,
+        lat,
+        lng,
         shift.lat,
         shift.lng,
         shift.radiusMeters
@@ -71,33 +139,39 @@ export function EmployeeHome() {
       if (!withinGeofence) {
         setInsideGeofence(false)
         setGeoError('You are outside the required geofence area')
-        setIsCapturing(false)
         return
       }
 
       setInsideGeofence(true)
-      clockIn({ lat: latitude, lng: longitude })
-    } catch (error) {
-      console.error('Clock in error:', error)
-      if ((error as GeolocationPositionError)?.code === 1) {
-        setGeoError('Location permission denied')
-      } else {
-        setGeoError('Unable to get GPS location')
+      clockIn({ lat, lng })
+
+      // Optionally send to webhook if configured
+      const webhook = import.meta.env.VITE_CLOCKIN_WEBHOOK as string | undefined
+      if (webhook) {
+        const payload = {
+          user: { name: user?.name, username: user?.email },
+          timestamp: new Date().toISOString(),
+          location: { lat, lng },
+          selfie,
+          shift: { startTime: shift.startTime, endTime: shift.endTime },
+        }
+        // fire-and-forget; do not block UI
+        fetch(webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(() => {})
       }
-      // For demo: keep requirements visible; do not auto clock-in
-    } finally {
-      setIsCapturing(false)
+      // Clear the cached items
+      localStorage.removeItem('selfieDataUrl')
+      localStorage.removeItem('lastGeo')
+    } catch (e) {
+      // ignore parse errors
     }
-  }
+  }, [user])
 
   // Derived UI states
-  const disabledReason = !gpsLocked
-    ? 'Waiting for GPS lock'
-    : insideGeofence === false
-    ? `Outside geofence (${shift.radiusMeters}m)`
-    : !selfieReady
-    ? 'Selfie not captured'
-    : null
+  const disabledReason = null
 
   return (
     <div className="space-y-6 px-6 lg:px-10 bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-900 dark:to-indigo-950 rounded-2xl">
@@ -164,6 +238,8 @@ export function EmployeeHome() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Selfie is captured in /employee/selfie route */}
+
               <div className="grid grid-cols-3 gap-4 text-sm">
                 <div className="flex items-center gap-2">
                   <motion.div animate={selfieReady ? { scale: 1.05 } : {}} transition={{ type: 'spring', stiffness: 300, damping: 15 }}>
@@ -218,7 +294,7 @@ export function EmployeeHome() {
                   onClick={handleClockIn}
                   className="w-full h-14 text-lg"
                   size="lg"
-                  disabled={Boolean(disabledReason) || isCapturing}
+                  disabled={isCapturing}
                 >
                   {isCapturing ? 'Preparing…' : 'Clock In'}
                 </Button>
