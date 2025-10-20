@@ -74,10 +74,16 @@ export default function SelfieCapture() {
     ctx.drawImage(videoRef.current, 0, 0, w, h)
     const dataUrl = c.toDataURL('image/jpeg', 0.8)
     setCaptured(dataUrl)
+    // Pause preview to freeze the frame after capture
+    try { videoRef.current.pause() } catch {}
   }
 
   const retake = () => {
     setCaptured(null)
+    // Resume the camera preview so it's ready to capture again
+    if (videoRef.current) {
+      videoRef.current.play().catch(() => {})
+    }
   }
 
   const composePlaceName = (d: any) => {
