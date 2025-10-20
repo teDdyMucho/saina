@@ -11,22 +11,59 @@ export default function SelfieCapture() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [placeName, setPlaceName] = useState<string | null>(null)
+  const [locLoading, setLocLoading] = useState<boolean>(false)
   const { user } = useAuthStore()
 
   // Actively request geolocation and resolve a human-readable place name
   async function requestLocationAndName(): Promise<{ lat: number; lng: number } | null> {
+    setLocLoading(true)
     if (!('geolocation' in navigator)) {
       setError((prev) => (prev ? prev + ' Location unsupported.' : 'Location unsupported.'))
+      setLocLoading(false)
       return null
     }
-    try {
-      const pos: GeolocationPosition = await new Promise((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 20000,
-          maximumAge: 0,
-        })
+
+    const getWith = (opts: PositionOptions) =>
+      new Promise<GeolocationPosition>((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, opts)
       )
+
+    const watchOnce = (opts: PositionOptions) =>
+      new Promise<GeolocationPosition>((resolve, reject) => {
+        const id = navigator.geolocation.watchPosition(
+          (p) => {
+            navigator.geolocation.clearWatch(id)
+            resolve(p)
+          },
+          (err) => {
+            navigator.geolocation.clearWatch(id)
+            reject(err)
+          },
+          opts
+        )
+        // Safety timeout to stop watching
+        setTimeout(() => navigator.geolocation.clearWatch(id), (opts.timeout || 15000) + 1000)
+      })
+
+    try {
+      let pos: GeolocationPosition | null = null
+      try {
+        // Try fast high-accuracy first
+        pos = await getWith({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 })
+      } catch (e) {
+        // Fall back: take first update from watch or low-accuracy getCurrentPosition
+        try {
+          pos = await Promise.race([
+            watchOnce({ enableHighAccuracy: false, timeout: 12000, maximumAge: 600000 }),
+            getWith({ enableHighAccuracy: false, timeout: 12000, maximumAge: 600000 }),
+          ])
+        } catch {
+          // Last resort: retry high-accuracy with longer timeout
+          pos = await getWith({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 })
+        }
+      }
+
+      if (!pos) throw new Error('No position')
       const c = { lat: pos.coords.latitude, lng: pos.coords.longitude }
       setCoords(c)
       try {
@@ -34,9 +71,11 @@ export default function SelfieCapture() {
         const d = await r.json()
         setPlaceName(composePlaceName(d))
       } catch {}
+      setLocLoading(false)
       return c
     } catch (e) {
-      setError((prev) => (prev ? prev + ' Location blocked.' : 'Location blocked.'))
+      setError('Waiting for location... please enable location and try again.')
+      setLocLoading(false)
       return null
     }
   }
@@ -80,11 +119,20 @@ export default function SelfieCapture() {
 
   const retake = () => {
     setCaptured(null)
-    // Resume the camera preview so it's ready to capture again
-    if (videoRef.current) {
-      videoRef.current.play().catch(() => {})
-    }
   }
+
+  // When leaving captured state, the <video> remounts. Ensure it resumes playback.
+  useEffect(() => {
+    if (!captured && videoRef.current && stream) {
+      try {
+        // Re-attach stream in case the element remounted
+        if (videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream
+        }
+        videoRef.current.play().catch(() => {})
+      } catch {}
+    }
+  }, [captured, stream])
 
   const composePlaceName = (d: any) => {
     const province = d?.principalSubdivision || d?.localityInfo?.administrative?.find((x: any) => /province/i.test(x?.description || ''))?.name
@@ -159,8 +207,13 @@ export default function SelfieCapture() {
           </div>
           <canvas ref={canvasRef} className="hidden" />
 
-          <div className="text-sm">
+          <div className="text-sm flex items-center justify-between">
             <p>Location: {placeName ? placeName : coords ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'Waiting for location...'}</p>
+            {!coords && (
+              <Button size="sm" variant="outline" onClick={requestLocationAndName} disabled={locLoading}>
+                {locLoading ? 'Getting…' : 'Get Location'}
+              </Button>
+            )}
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -171,7 +224,9 @@ export default function SelfieCapture() {
             ) : (
               <>
                 <Button variant="outline" onClick={retake}>Retake</Button>
-                <Button onClick={saveAndClose} disabled={!coords}>Save & Close</Button>
+                <Button onClick={saveAndClose} disabled={!coords || locLoading}>
+                  {locLoading ? 'Getting location…' : 'Save & Close'}
+                </Button>
               </>
             )}
           </div>
