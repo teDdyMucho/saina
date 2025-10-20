@@ -36,6 +36,19 @@ export function EmployeeHome() {
     radiusMeters: 100,
   })
 
+  // Load clockIn_id from localStorage on mount
+  useEffect(() => {
+    try {
+      const storedClockInId = localStorage.getItem('currentClockInId')
+      if (storedClockInId) {
+        setCurrentClockInId(storedClockInId)
+        console.log('Loaded clockIn_id:', storedClockInId)
+      }
+    } catch (error) {
+      console.error('Failed to load clockIn_id:', error)
+    }
+  }, [])
+
   // Load today's shift for logged-in user by username (fallback to full name)
   useEffect(() => {
     const fetchToday = async () => {
@@ -128,8 +141,11 @@ export function EmployeeHome() {
       setIsCapturing(true)
       try {
         const clockInId = currentClockInId || localStorage.getItem('currentClockInId')
+        console.log('Break action:', action, 'clockIn_id:', clockInId)
+        
         if (!clockInId) {
-          setGeoError('No active clock-in session found')
+          console.error('No clockIn_id found in state or localStorage')
+          setGeoError('No active clock-in session found. Please clock in first.')
           setIsCapturing(false)
           return
         }
@@ -158,13 +174,20 @@ export function EmployeeHome() {
           employee: user ? { name: user.name, username: user.email } : null,
         }
 
-        await fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
+        const response = await fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
+        }).catch(err => {
+          console.error('Webhook fetch error:', err)
+          throw new Error('Network error')
         })
 
-        // Update local state
+        if (!response || !response.ok) {
+          throw new Error('Webhook request failed')
+        }
+
+        // Update local state only after successful webhook call
         if (action === 'startBreak') {
           startBreak()
         } else {
@@ -173,7 +196,7 @@ export function EmployeeHome() {
         }
       } catch (error) {
         console.error('Break action error:', error)
-        setGeoError('Failed to process break action')
+        setGeoError('Failed to process break action. Please try again.')
       } finally {
         setIsCapturing(false)
       }
@@ -456,20 +479,40 @@ export function EmployeeHome() {
               {!breakDone ? (
                 <div className="grid grid-cols-2 gap-3">
                   {!isOnBreak ? (
-                    <Button onClick={() => handleAction('startBreak')} variant="outline" className="h-12">
-                      <Coffee className="w-4 h-4 mr-2" /> Start Break
+                    <Button 
+                      onClick={() => handleAction('startBreak')} 
+                      variant="outline" 
+                      className="h-12"
+                      disabled={isCapturing}
+                    >
+                      <Coffee className="w-4 h-4 mr-2" /> {isCapturing ? 'Processing...' : 'Start Break'}
                     </Button>
                   ) : (
-                    <Button onClick={() => handleAction('endBreak')} variant="secondary" className="h-12">
-                      <Coffee className="w-4 h-4 mr-2" /> End Break
+                    <Button 
+                      onClick={() => handleAction('endBreak')} 
+                      variant="secondary" 
+                      className="h-12"
+                      disabled={isCapturing}
+                    >
+                      <Coffee className="w-4 h-4 mr-2" /> {isCapturing ? 'Processing...' : 'End Break'}
                     </Button>
                   )}
-                  <Button onClick={() => handleAction('clockOut')} variant="destructive" className="h-12">
+                  <Button 
+                    onClick={() => handleAction('clockOut')} 
+                    variant="destructive" 
+                    className="h-12"
+                    disabled={isCapturing}
+                  >
                     <LogOutIcon className="w-4 h-4 mr-2" /> Clock Out
                   </Button>
                 </div>
               ) : (
-                <Button onClick={() => handleAction('clockOut')} variant="destructive" className="w-full h-12">
+                <Button 
+                  onClick={() => handleAction('clockOut')} 
+                  variant="destructive" 
+                  className="w-full h-12"
+                  disabled={isCapturing}
+                >
                   <LogOutIcon className="w-4 h-4 mr-2" /> Clock Out
                 </Button>
               )}

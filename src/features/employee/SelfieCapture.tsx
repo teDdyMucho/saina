@@ -225,6 +225,10 @@ export default function SelfieCapture() {
 
     // Generate clockIn_id for new clock-in sessions
     const clockInId = action === 'clockIn' ? crypto.randomUUID() : null
+    
+    if (clockInId) {
+      console.log('Generated clockIn_id:', clockInId)
+    }
 
     const payload = {
       name: nameToSend || `${current.lat.toFixed(5)}, ${current.lng.toFixed(5)}`,
@@ -235,6 +239,8 @@ export default function SelfieCapture() {
       action,
       ...(clockInId && { clockIn_id: clockInId }),
     }
+    
+    console.log('Sending to webhook:', action, 'with clockIn_id:', clockInId)
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -271,6 +277,7 @@ export default function SelfieCapture() {
       // Store clockIn_id for clock-in action
       if (clockInId) {
         localStorage.setItem('currentClockInId', clockInId)
+        console.log('Stored clockIn_id in localStorage:', clockInId)
       }
 
       // If backend confirms with 'Done', go home/close immediately
@@ -298,6 +305,7 @@ export default function SelfieCapture() {
     // Store clockIn_id for clock-in action
     if (clockInId) {
       localStorage.setItem('currentClockInId', clockInId)
+      console.log('Stored clockIn_id in localStorage (fallback):', clockInId)
     }
     if (window.opener) {
       window.close()
