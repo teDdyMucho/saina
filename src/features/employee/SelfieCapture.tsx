@@ -12,6 +12,7 @@ export default function SelfieCapture() {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [placeName, setPlaceName] = useState<string | null>(null)
   const [locLoading, setLocLoading] = useState<boolean>(false)
+  const [sending, setSending] = useState<boolean>(false)
   const { user } = useAuthStore()
 
   // Actively request geolocation and resolve a human-readable place name
@@ -148,13 +149,20 @@ export default function SelfieCapture() {
     const admin = d?.localityInfo?.administrative || []
     const findAdmin = (re: RegExp) => admin.find((x: any) => re.test((x?.description || '') + ' ' + (x?.name || '')))?.name
 
-    const province = d?.principalSubdivision || findAdmin(/province/i)
+    // Determine province: avoid regions like "Region III"
+    const principal = d?.principalSubdivision as string | undefined
+    let province = principal || findAdmin(/province/i)
+    if (province && /region/i.test(province)) {
+      const provFromAdmin = findAdmin(/province/i)
+      if (provFromAdmin) province = provFromAdmin
+    }
+
     const locality = d?.locality || d?.city || findAdmin(/city|municipality|town/i)
     const barangayRaw = findAdmin(/barangay|village|suburb|neighbourhood|district/i)
-    const country = (d?.countryName || '').toLowerCase()
+    const country = (d?.countryName || '').toLowerCase().replace(/\s*\(the\)\s*/i, '')
 
     const brgy = barangayRaw ? `brgy. ${barangayRaw}`.toLowerCase() : ''
-    const locLower = locality ? String(locality).toLowerCase() : ''
+    const locLower = locality ? String(locality).toLowerCase().replace(/^city of\s+/i, '') : ''
 
     const partsLeft: string[] = []
     if (brgy) partsLeft.push(brgy)
@@ -184,9 +192,12 @@ export default function SelfieCapture() {
   }
 
   const saveAndClose = async () => {
+    if (sending) return
+    setSending(true)
     const current = coords || (await requestLocationAndName())
     if (!current) {
       setError('Waiting for location... please enable location and try again.')
+      setSending(false)
       return
     }
     // Fire webhook with current location (and selfie if captured)
@@ -205,16 +216,39 @@ export default function SelfieCapture() {
       location: current,
       employee: user ? { name: user.name, username: user.email } : null,
     }
-    fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => {})
+    try {
+      const res = await fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const text = await res.text().catch(() => '')
 
-    // Persist for parent page to complete clock-in
+      // Persist for parent page to complete clock-in
+      if (captured) localStorage.setItem('selfieDataUrl', captured)
+      localStorage.setItem('lastGeo', JSON.stringify(current))
+
+      // If backend confirms with 'Done', go home/close immediately
+      if (res.ok && /done/i.test(text)) {
+        if (window.opener) {
+          window.close()
+        } else {
+          window.location.replace('/employee')
+        }
+        return
+      }
+    } catch (e) {
+      // network errors fall through to default close/navigate
+    }
+    // Default behavior if no explicit 'Done' received
     if (captured) localStorage.setItem('selfieDataUrl', captured)
-    localStorage.setItem('lastGeo', JSON.stringify(coords))
-    window.close()
+    localStorage.setItem('lastGeo', JSON.stringify(current))
+    if (window.opener) {
+      window.close()
+    } else {
+      window.location.replace('/employee')
+    }
+    setSending(false)
   }
 
   return (
@@ -250,8 +284,8 @@ export default function SelfieCapture() {
             ) : (
               <>
                 <Button variant="outline" onClick={retake}>Retake</Button>
-                <Button onClick={saveAndClose} disabled={!coords || locLoading}>
-                  {locLoading ? 'Getting location…' : 'Save & Close'}
+                <Button onClick={saveAndClose} disabled={!coords || locLoading || sending}>
+                  {sending ? 'Saving…' : locLoading ? 'Getting location…' : 'Save & Close'}
                 </Button>
               </>
             )}
