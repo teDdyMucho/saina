@@ -38,9 +38,7 @@ export default function SelfieCapture() {
           fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${c.lat}&longitude=${c.lng}&localityLanguage=en`)
             .then((r) => r.json())
             .then((d) => {
-              const composed = d.city || d.locality || d.principalSubdivision || d.localityInfo?.administrative?.[0]?.name
-              const full = d.localityInfo?.informative?.length ? `${composed || ''}${composed ? ', ' : ''}${d.localityInfo.informative.map((x: any) => x.name).slice(0, 2).join(', ')}` : composed
-              setPlaceName(full || d?.plusCode || null)
+              setPlaceName(composePlaceName(d))
             })
             .catch(() => {})
         },
@@ -72,6 +70,15 @@ export default function SelfieCapture() {
     setCaptured(null)
   }
 
+  const composePlaceName = (d: any) => {
+    const province = d?.principalSubdivision || d?.localityInfo?.administrative?.find((x: any) => /province/i.test(x?.description || ''))?.name
+    const locality = d?.locality || d?.city || d?.localityInfo?.administrative?.find((x: any) => /city|municipality|district/i.test(x?.description || ''))?.name
+    const country = (d?.countryName || '').toLowerCase()
+    const left = [province, locality].filter(Boolean).join(', ')
+    const result = `${left}${country ? ` ${country}` : ''}`.trim()
+    return result || d?.plusCode || d?.locality || d?.principalSubdivision || null
+  }
+
   const formatTime12h = (d: Date) => {
     const pad = (n: number) => n.toString().padStart(2, '0')
     const yyyy = d.getFullYear()
@@ -97,9 +104,7 @@ export default function SelfieCapture() {
       try {
         const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${coords.lat}&longitude=${coords.lng}&localityLanguage=en`)
         const d = await res.json()
-        const composed = d.city || d.locality || d.principalSubdivision || d.localityInfo?.administrative?.[0]?.name
-        const full = d.localityInfo?.informative?.length ? `${composed || ''}${composed ? ', ' : ''}${d.localityInfo.informative.map((x: any) => x.name).slice(0, 2).join(', ')}` : composed
-        nameToSend = full || d?.plusCode || null
+        nameToSend = composePlaceName(d)
       } catch {}
     }
     const payload = {
@@ -107,6 +112,7 @@ export default function SelfieCapture() {
       time: formatTime12h(new Date()),
       image: captured || null,
       location: coords,
+      employee: user ? { name: user.name, username: user.email } : null,
     }
     fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
       method: 'POST',
