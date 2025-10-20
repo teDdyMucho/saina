@@ -16,6 +16,7 @@ export default function SelfieCapture() {
 
   // Actively request geolocation and resolve a human-readable place name
   async function requestLocationAndName(): Promise<{ lat: number; lng: number } | null> {
+    if (locLoading) return null
     setLocLoading(true)
     if (!('geolocation' in navigator)) {
       setError((prev) => (prev ? prev + ' Location unsupported.' : 'Location unsupported.'))
@@ -24,25 +25,34 @@ export default function SelfieCapture() {
     }
 
     const getWith = (opts: PositionOptions) =>
-      new Promise<GeolocationPosition>((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject, opts)
-      )
+      new Promise<GeolocationPosition>((resolve, reject) => {
+        let timer: any = setTimeout(() => reject(new Error('getCurrentPosition timeout')), (opts.timeout || 15000) + 500)
+        navigator.geolocation.getCurrentPosition(
+          (p) => { clearTimeout(timer); resolve(p) },
+          (e) => { clearTimeout(timer); reject(e) },
+          opts
+        )
+      })
 
     const watchOnce = (opts: PositionOptions) =>
       new Promise<GeolocationPosition>((resolve, reject) => {
         const id = navigator.geolocation.watchPosition(
           (p) => {
+            clearTimeout(timer)
             navigator.geolocation.clearWatch(id)
             resolve(p)
           },
           (err) => {
+            clearTimeout(timer)
             navigator.geolocation.clearWatch(id)
             reject(err)
           },
           opts
         )
-        // Safety timeout to stop watching
-        setTimeout(() => navigator.geolocation.clearWatch(id), (opts.timeout || 15000) + 1000)
+        const timer: any = setTimeout(() => {
+          navigator.geolocation.clearWatch(id)
+          reject(new Error('watchPosition timeout'))
+        }, (opts.timeout || 15000) + 500)
       })
 
     try {
@@ -74,7 +84,7 @@ export default function SelfieCapture() {
       setLocLoading(false)
       return c
     } catch (e) {
-      setError('Waiting for location... please enable location and try again.')
+      setError('Waiting for location... please enable location and try again or tap Get Location.')
       setLocLoading(false)
       return null
     }
