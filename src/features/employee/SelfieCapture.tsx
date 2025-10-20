@@ -13,6 +13,34 @@ export default function SelfieCapture() {
   const [placeName, setPlaceName] = useState<string | null>(null)
   const { user } = useAuthStore()
 
+  // Actively request geolocation and resolve a human-readable place name
+  async function requestLocationAndName(): Promise<{ lat: number; lng: number } | null> {
+    if (!('geolocation' in navigator)) {
+      setError((prev) => (prev ? prev + ' Location unsupported.' : 'Location unsupported.'))
+      return null
+    }
+    try {
+      const pos: GeolocationPosition = await new Promise((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 0,
+        })
+      )
+      const c = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+      setCoords(c)
+      try {
+        const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${c.lat}&longitude=${c.lng}&localityLanguage=en`)
+        const d = await r.json()
+        setPlaceName(composePlaceName(d))
+      } catch {}
+      return c
+    } catch (e) {
+      setError((prev) => (prev ? prev + ' Location blocked.' : 'Location blocked.'))
+      return null
+    }
+  }
+
   useEffect(() => {
     const start = async () => {
       try {
@@ -26,25 +54,7 @@ export default function SelfieCapture() {
         setError('Camera permission denied or unavailable.')
       }
 
-      if (!('geolocation' in navigator)) {
-        setError((prev) => (prev ? prev + ' Location unsupported.' : 'Location unsupported.'))
-        return
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const c = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-          setCoords(c)
-          // Reverse geocode to a human-readable place name (CORS-friendly)
-          fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${c.lat}&longitude=${c.lng}&localityLanguage=en`)
-            .then((r) => r.json())
-            .then((d) => {
-              setPlaceName(composePlaceName(d))
-            })
-            .catch(() => {})
-        },
-        () => setError((prev) => (prev ? prev + ' Location blocked.' : 'Location blocked.')),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      )
+      await requestLocationAndName()
     }
     start()
     return () => {
@@ -94,7 +104,8 @@ export default function SelfieCapture() {
   }
 
   const saveAndClose = async () => {
-    if (!coords) {
+    const current = coords || (await requestLocationAndName())
+    if (!current) {
       setError('Waiting for location... please enable location and try again.')
       return
     }
@@ -102,16 +113,16 @@ export default function SelfieCapture() {
     let nameToSend = placeName
     if (!nameToSend) {
       try {
-        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${coords.lat}&longitude=${coords.lng}&localityLanguage=en`)
+        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${current.lat}&longitude=${current.lng}&localityLanguage=en`)
         const d = await res.json()
         nameToSend = composePlaceName(d)
       } catch {}
     }
     const payload = {
-      name: nameToSend || `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`,
+      name: nameToSend || `${current.lat.toFixed(5)}, ${current.lng.toFixed(5)}`,
       time: formatTime12h(new Date()),
       image: captured || null,
-      location: coords,
+      location: current,
       employee: user ? { name: user.name, username: user.email } : null,
     }
     fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
@@ -143,7 +154,7 @@ export default function SelfieCapture() {
           <canvas ref={canvasRef} className="hidden" />
 
           <div className="text-sm">
-            <p>Location: {coords ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'Waiting for location...'}</p>
+            <p>Location: {placeName ? placeName : coords ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'Waiting for location...'}</p>
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -154,7 +165,7 @@ export default function SelfieCapture() {
             ) : (
               <>
                 <Button variant="outline" onClick={retake}>Retake</Button>
-                <Button onClick={saveAndClose}>Save & Close</Button>
+                <Button onClick={saveAndClose} disabled={!coords}>Save & Close</Button>
               </>
             )}
           </div>
