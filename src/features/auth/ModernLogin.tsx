@@ -99,6 +99,7 @@ interface ModernLoginProps {
 export default function ModernLogin({ onAuth }: ModernLoginProps) {
   const navigate = useNavigate()
   const login = useAuthStore((state) => state.login)
+  const storedUser = useAuthStore((state) => state.user)
   const {
     username,
     setUsername,
@@ -114,6 +115,13 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
     signIn,
     isValid
   } = useLogin()
+
+  // Prefill username if previously stored
+  useEffect(() => {
+    if (storedUser && !username) {
+      setUsername(storedUser.email)
+    }
+  }, [storedUser])
 
   const [toast, setToast] = useState<{
     show: boolean
@@ -158,7 +166,7 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
       
       // Update auth store and navigate
       setTimeout(() => {
-        login(result.username, result.role, result.fullName || 'John Doe')
+        login(result.username, result.role, result.fullName || 'John Doe', rememberMe)
         navigate(result.role === 'admin' ? '/admin' : '/employee')
       }, 1000)
     } else {

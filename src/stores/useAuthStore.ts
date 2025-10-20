@@ -14,27 +14,51 @@ interface User {
 interface AuthState {
   user: User | null
   isAuthenticated: boolean
-  login: (identifier: string, role: UserRole, nameOverride?: string) => void
+  login: (identifier: string, role: UserRole, nameOverride?: string, remember?: boolean) => void
   logout: () => void
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  isAuthenticated: false,
-  login: (identifier: string, role: UserRole, nameOverride?: string) => {
-    set({
-      user: {
+export const useAuthStore = create<AuthState>((set) => {
+  let initialUser: User | null = null
+  try {
+    const saved = localStorage.getItem('authUser') ?? sessionStorage.getItem('authUser')
+    if (saved) initialUser = JSON.parse(saved) as User
+  } catch {}
+
+  return {
+    user: initialUser,
+    isAuthenticated: !!initialUser,
+    login: (identifier: string, role: UserRole, nameOverride?: string, remember: boolean = false) => {
+      const user: User = {
         id: '1',
         name: nameOverride || (role === 'admin' ? 'Admin User' : 'John Doe'),
         email: identifier,
         role,
         orgId: 'org-1',
         avatar: undefined,
-      },
-      isAuthenticated: true,
-    })
-  },
-  logout: () => {
-    set({ user: null, isAuthenticated: false })
-  },
-}))
+      }
+
+      // Persist based on remember flag
+      try {
+        const key = 'authUser'
+        const data = JSON.stringify(user)
+        if (remember) {
+          localStorage.setItem(key, data)
+          sessionStorage.removeItem(key)
+        } else {
+          sessionStorage.setItem(key, data)
+          localStorage.removeItem(key)
+        }
+      } catch {}
+
+      set({ user, isAuthenticated: true })
+    },
+    logout: () => {
+      try {
+        localStorage.removeItem('authUser')
+        sessionStorage.removeItem('authUser')
+      } catch {}
+      set({ user: null, isAuthenticated: false })
+    },
+  }
+})
