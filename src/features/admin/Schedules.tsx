@@ -3,38 +3,54 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Calendar, Clock, Users } from 'lucide-react'
+import { Calendar, Clock, Users, Pencil, Trash } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
-const initialShiftTemplates = [
-  {
-    id: '1',
-    name: 'Morning Shift',
-    startTime: '08:00',
-    endTime: '16:00',
-    breakMinutes: 60,
-    graceMinutes: 15,
-    weekdays: [1, 2, 3, 4, 5],
-  },
-  {
-    id: '2',
-    name: 'Afternoon Shift',
-    startTime: '12:00',
-    endTime: '20:00',
-    breakMinutes: 60,
-    graceMinutes: 10,
-    weekdays: [1, 2, 3, 4, 5],
-  },
-  {
-    id: '3',
-    name: 'Night Shift',
-    startTime: '20:00',
-    endTime: '04:00',
-    breakMinutes: 60,
-    graceMinutes: 10,
-    weekdays: [0, 1, 2, 3, 4, 5, 6],
-  },
-]
+type ShiftTemplate = {
+  id: string
+  name: string
+  startTime: string
+  endTime: string
+  breakStart: string
+  breakEnd: string
+  weekdays: number[]
+}
+
+// Parse the `days` column (could be a JSON array of names or comma-separated string)
+function parseDaysToIndices(days: any): number[] {
+  if (!days) return []
+  try {
+    const parsed = typeof days === 'string' ? JSON.parse(days) : days
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((d) => {
+          const name = String(d).slice(0, 3)
+          return weekdayNames.indexOf(name)
+        })
+        .filter((i) => i >= 0)
+    }
+  } catch {
+    // If not JSON, try comma-separated
+    const parts = String(days).split(',').map((s) => s.trim())
+    return parts
+      .map((p) => weekdayNames.indexOf(p.slice(0, 3)))
+      .filter((i) => i >= 0)
+  }
+  return []
+}
+
+// Parse a DB break_time string (e.g. "12:00 pm - 01:00 pm" or "12:00-13:00") into 24h HH:mm range
+function parseBreakTo24h(brk?: string | null): { start: string; end: string } {
+  if (!brk) return { start: '', end: '' }
+  const raw = String(brk).replace(/\s+/g, ' ').trim()
+  const parts = raw.split(/-||–|—/).map((p) => p.trim())
+  if (parts.length >= 2) {
+    return { start: to24h(parts[0]), end: to24h(parts[1]) }
+  }
+  return { start: '', end: '' }
+}
+
+const initialShiftTemplates: ShiftTemplate[] = []
 
 // Assigned schedules mock removed; hook up to Supabase later if needed
 
@@ -52,18 +68,35 @@ function to12h(hhmm: string) {
   return `${hPad}:${mStr} ${ampm}`
 }
 
+// Helper to convert possible 12-hour strings like "09:00 am" back to "HH:mm" for <input type="time">
+function to24h(maybe12h: string): string {
+  if (!maybe12h) return ''
+  const s = maybe12h.trim().toLowerCase()
+  // Already 24h HH:mm
+  if (/^\d{2}:\d{2}$/.test(s)) return s
+  const m = s.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/)
+  if (!m) return ''
+  let h = parseInt(m[1], 10)
+  const min = m[2]
+  const ampm = m[3]
+  if (ampm === 'pm' && h !== 12) h += 12
+  if (ampm === 'am' && h === 12) h = 0
+  const hh = h.toString().padStart(2, '0')
+  return `${hh}:${min}`
+}
+
 export function Schedules() {
   const [isFormOpen, setIsFormOpen] = useState(false)
-  const [shiftTemplates, setShiftTemplates] = useState(initialShiftTemplates)
-  const [editing, setEditing] = useState<null | (typeof initialShiftTemplates)[number]>(null)
+  const [shiftTemplates, setShiftTemplates] = useState<ShiftTemplate[]>(initialShiftTemplates)
+  const [editing, setEditing] = useState<ShiftTemplate | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [form, setForm] = useState({
     id: '',
     name: '',
     startTime: '',
     endTime: '',
-    breakMinutes: 0,
-    graceMinutes: 0,
+    breakStart: '',
+    breakEnd: '',
     weekdays: [] as number[],
   })
   const [assign, setAssign] = useState({
@@ -86,8 +119,8 @@ export function Schedules() {
     details?: {
       startTime: string
       endTime: string
-      breakMinutes: number
-      graceMinutes: number
+      breakStart: string
+      breakEnd: string
       weekdays: string[]
     }
   }>>([])
@@ -134,8 +167,8 @@ export function Schedules() {
               ? {
                   startTime: t.startTime,
                   endTime: t.endTime,
-                  breakMinutes: t.breakMinutes,
-                  graceMinutes: t.graceMinutes,
+                  breakStart: t.breakStart,
+                  breakEnd: t.breakEnd,
                   weekdays: t.weekdays.map((i) => weekdayNames[i]),
                 }
               : undefined,
@@ -149,31 +182,48 @@ export function Schedules() {
     loadSchedules()
   }, [])
 
+  // Hover action handlers for Assigned Schedules
+  const editAssigned = (s: {
+    id: string
+    employeeName: string
+    shiftName: string
+    startDate: string
+    endDate?: string | null
+  }) => {
+    const emp = employees.find((e) => e.name === s.employeeName)
+    const shift = shiftTemplates.find((t) => t.name === s.shiftName)
+    setAssign({
+      employeeId: emp ? String(emp.id) : '',
+      shiftId: shift ? shift.id : '',
+      startDate: s.startDate || '',
+      endDate: s.endDate || '',
+    })
+    setIsFormOpen(true)
+  }
+
+  const deleteAssigned = (id: string) => {
+    setAssigned((list) => list.filter((x) => x.id !== id))
+  }
+
   // Load shift templates from Supabase `template` table
   useEffect(() => {
     const loadTemplates = async () => {
       const { data, error } = await supabase
         .from('template')
-        .select('id, shift_name, start_time, end_time, break_time, grace, days')
+        .select('id, shift_name, start_time, end_time, break_time, days, created_at')
 
       if (!error && data) {
         const mapped = data.map((row: any) => {
-          let dayNames: string[] = []
-          try {
-            dayNames = JSON.parse(row.days || '[]')
-          } catch {
-            dayNames = []
-          }
-          const weekdays = dayNames
-            .map((d) => weekdayNames.indexOf(d))
-            .filter((i) => i >= 0)
+          const weekdays: number[] = parseDaysToIndices(row.days)
+          const brk = parseBreakTo24h(row.break_time as string)
           return {
             id: String(row.id),
             name: row.shift_name as string,
-            startTime: (row.start_time as string) || '',
-            endTime: (row.end_time as string) || '',
-            breakMinutes: parseInt(row.break_time ?? '0', 10) || 0,
-            graceMinutes: parseInt(row.grace ?? '0', 10) || 0,
+            // Normalize for <input type="time">
+            startTime: to24h(row.start_time as string) || '',
+            endTime: to24h(row.end_time as string) || '',
+            breakStart: brk.start,
+            breakEnd: brk.end,
             weekdays,
           }
         })
@@ -188,7 +238,7 @@ export function Schedules() {
     loadSchedules()
   }, [shiftTemplates])
 
-  const openEdit = (tmpl: (typeof initialShiftTemplates)[number]) => {
+  const openEdit = (tmpl: ShiftTemplate) => {
     setEditing(tmpl)
     setIsCreating(false)
     setForm({
@@ -196,8 +246,8 @@ export function Schedules() {
       name: tmpl.name,
       startTime: tmpl.startTime,
       endTime: tmpl.endTime,
-      breakMinutes: tmpl.breakMinutes,
-      graceMinutes: tmpl.graceMinutes,
+      breakStart: tmpl.breakStart,
+      breakEnd: tmpl.breakEnd,
       weekdays: [...tmpl.weekdays],
     })
   }
@@ -210,8 +260,8 @@ export function Schedules() {
       name: 'New Shift',
       startTime: '09:00',
       endTime: '18:00',
-      breakMinutes: 60,
-      graceMinutes: 10,
+      breakStart: '12:00',
+      breakEnd: '13:00',
       weekdays: [1,2,3,4,5],
     })
     setForm({
@@ -219,8 +269,8 @@ export function Schedules() {
       name: 'New Shift',
       startTime: '09:00',
       endTime: '18:00',
-      breakMinutes: 60,
-      graceMinutes: 10,
+      breakStart: '12:00',
+      breakEnd: '13:00',
       weekdays: [1,2,3,4,5],
     })
   }
@@ -258,8 +308,7 @@ export function Schedules() {
           name: form.name,
           startTime: to12h(form.startTime),
           endTime: to12h(form.endTime),
-          breakMinutes: form.breakMinutes,
-          graceMinutes: form.graceMinutes,
+          breakTime: `${to12h(form.breakStart)} - ${to12h(form.breakEnd)}`,
           weekdays: form.weekdays.map((i) => weekdayNames[i]),
           action: isCreating ? 'create' : 'update',
           createdAt: new Date().toISOString(),
@@ -303,8 +352,7 @@ export function Schedules() {
           schedule: shift ? {
             startTime: to12h(shift.startTime),
             endTime: to12h(shift.endTime),
-            breakMinutes: shift.breakMinutes,
-            graceMinutes: shift.graceMinutes,
+            breakTime: `${to12h(shift.breakStart)} - ${to12h(shift.breakEnd)}`,
             weekdays: shift.weekdays.map((i) => weekdayNames[i]),
           } : null,
           createdAt: new Date().toISOString(),
@@ -377,13 +425,13 @@ export function Schedules() {
                 <div className="flex items-center gap-2 text-sm">
                   <Clock className="w-4 h-4 text-muted-foreground" />
                   <span>
-                    {shift.startTime} - {shift.endTime}
+                    {to12h(shift.startTime)} - {to12h(shift.endTime)}
                   </span>
                 </div>
                 
                 <div className="text-sm">
                   <p className="text-muted-foreground">
-                    Break: {shift.breakMinutes}m • Grace: {shift.graceMinutes}m
+                    Break: {to12h(shift.breakStart)} - {to12h(shift.breakEnd)}
                   </p>
                 </div>
 
@@ -418,10 +466,19 @@ export function Schedules() {
           </Card>
         ) : (
           assigned.map((s) => (
-            <Card key={s.id}>
+            <Card key={s.id} className="group relative">
               <CardContent className="pt-6">
+                {/* Top-right small icon actions */}
+                <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => editAssigned(s)} title="Edit">
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button size="sm" variant="destructive" className="h-7 w-7 p-0" onClick={() => deleteAssigned(s.id)} title="Delete">
+                    <Trash className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
                 <div className="flex items-center justify-between">
-                  <div className="space-y-2">
+                  <div className="space-y-2 pr-16">
                     <div className="flex items-center gap-2">
                       <Users className="w-4 h-4 text-muted-foreground" />
                       <span className="font-semibold">{s.employeeName}</span>
@@ -429,7 +486,7 @@ export function Schedules() {
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <span>
                         {s.shiftName}
-                        {s.details ? ` • ${s.details.startTime} - ${s.details.endTime}` : ''}
+                        {s.details ? ` • ${to12h(s.details.startTime)} - ${to12h(s.details.endTime)}` : ''}
                       </span>
                       <span>•</span>
                       <div className="flex items-center gap-1">
@@ -440,7 +497,7 @@ export function Schedules() {
                     {s.details && (
                       <>
                         <div className="text-sm text-muted-foreground">
-                          Break: {s.details.breakMinutes}m • Grace: {s.details.graceMinutes}m
+                          Break: {to12h(s.details.breakStart)} - {to12h(s.details.breakEnd)}
                         </div>
                         <div className="flex gap-1 flex-wrap">
                           {s.details.weekdays.map((d) => (
@@ -544,12 +601,12 @@ export function Schedules() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Break (minutes)</label>
-                    <Input type="number" min={0} value={form.breakMinutes} onChange={(e) => setForm({ ...form, breakMinutes: Number(e.target.value) })} required />
+                    <label className="text-sm font-medium">Break Start</label>
+                    <Input type="time" value={form.breakStart} onChange={(e) => setForm({ ...form, breakStart: e.target.value })} required />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Grace (minutes)</label>
-                    <Input type="number" min={0} value={form.graceMinutes} onChange={(e) => setForm({ ...form, graceMinutes: Number(e.target.value) })} required />
+                    <label className="text-sm font-medium">Break End</label>
+                    <Input type="time" value={form.breakEnd} onChange={(e) => setForm({ ...form, breakEnd: e.target.value })} required />
                   </div>
                 </div>
                 <div className="space-y-2">

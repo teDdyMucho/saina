@@ -67,15 +67,31 @@ export function EmployeeHome() {
 
       const { data: tmpl } = await supabase
         .from('template')
-        .select('start_time, end_time, break_time, grace, days')
+        .select('start_time, end_time, break_time, days')
         .eq('shift_name', active.shift_name)
         .maybeSingle()
 
       if (tmpl) {
+        const to12h = (s?: string) => {
+          if (!s) return '--'
+          const m = String(s).toLowerCase().match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$/)
+          if (!m) return s
+          let h = parseInt(m[1], 10)
+          const min = m[2]
+          const hasAmPm = !!m[3]
+          let ampm = m[3]
+          if (!hasAmPm) {
+            ampm = h >= 12 ? 'pm' : 'am'
+            h = h % 12
+            if (h === 0) h = 12
+          }
+          const hh = h < 10 ? `0${h}` : String(h)
+          return `${hh}:${min} ${ampm}`
+        }
         setShift((prev) => ({
           ...prev,
-          startTime: tmpl.start_time ?? prev.startTime,
-          endTime: tmpl.end_time ?? prev.endTime,
+          startTime: to12h(tmpl.start_time) || prev.startTime,
+          endTime: to12h(tmpl.end_time) || prev.endTime,
         }))
       }
     }
@@ -102,25 +118,26 @@ export function EmployeeHome() {
     return () => clearInterval(timer)
   }, [currentSession])
 
-  const handleClockIn = async () => {
+  const handleAction = async (action: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut') => {
     setIsCapturing(true)
     try {
-      // Navigate to the capture route in the same tab
+      localStorage.setItem('pendingAction', action)
       navigate('/employee/selfie')
       return
     } catch (error) {
-      console.error('Clock in navigation error:', error)
+      console.error('Navigation error:', error)
       setGeoError('Unable to open selfie capture')
     } finally {
       setIsCapturing(false)
     }
   }
 
-  // After returning from the capture route, if selfie + geo exist in localStorage, complete clock-in
+  // After returning from the capture route, if selfie + geo exist in localStorage, complete the pending action
   useEffect(() => {
     const selfie = localStorage.getItem('selfieDataUrl')
     const geo = localStorage.getItem('lastGeo')
-    if (!selfie || !geo) return
+    const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
+    if (!selfie || !geo || !pendingAction) return
     try {
       const { lat, lng } = JSON.parse(geo)
       setSelfieDataUrl(selfie)
@@ -143,7 +160,19 @@ export function EmployeeHome() {
       }
 
       setInsideGeofence(true)
-      clockIn({ lat, lng })
+
+      // Apply local state change based on action
+      if (pendingAction === 'clockIn') {
+        clockIn({ lat, lng })
+      } else if (pendingAction === 'startBreak') {
+        startBreak()
+      } else if (pendingAction === 'endBreak') {
+        endBreak()
+        try { localStorage.setItem('breakCompleted', '1') } catch {}
+      } else if (pendingAction === 'clockOut') {
+        clockOut()
+        try { localStorage.removeItem('breakCompleted') } catch {}
+      }
 
       // Optionally send to webhook if configured
       const webhook = import.meta.env.VITE_CLOCKIN_WEBHOOK as string | undefined
@@ -165,6 +194,7 @@ export function EmployeeHome() {
       // Clear the cached items
       localStorage.removeItem('selfieDataUrl')
       localStorage.removeItem('lastGeo')
+      localStorage.removeItem('pendingAction')
     } catch (e) {
       // ignore parse errors
     }
@@ -172,6 +202,23 @@ export function EmployeeHome() {
 
   // Derived UI states
   const disabledReason = null
+
+  // Decide button label and action
+  let mainAction: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' = 'clockIn'
+  let mainLabel = 'Clock In'
+  const breakDone = typeof window !== 'undefined' ? localStorage.getItem('breakCompleted') === '1' : false
+  if (currentSession) {
+    if (isOnBreak) {
+      mainAction = 'endBreak'
+      mainLabel = 'End Break'
+    } else if (!breakDone) {
+      mainAction = 'startBreak'
+      mainLabel = 'Start Break'
+    } else {
+      mainAction = 'clockOut'
+      mainLabel = 'Clock Out'
+    }
+  }
 
   return (
     <div className="space-y-6 px-6 lg:px-10 bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-900 dark:to-indigo-950 rounded-2xl">
@@ -291,12 +338,12 @@ export function EmployeeHome() {
 
               <motion.div whileTap={{ scale: 0.98 }}>
                 <Button
-                  onClick={handleClockIn}
+                  onClick={() => handleAction(mainAction)}
                   className="w-full h-14 text-lg"
                   size="lg"
                   disabled={isCapturing}
                 >
-                  {isCapturing ? 'Preparing…' : 'Clock In'}
+                  {isCapturing ? 'Preparing…' : mainLabel}
                 </Button>
               </motion.div>
               {disabledReason && (

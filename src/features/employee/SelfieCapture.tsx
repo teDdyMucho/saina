@@ -209,15 +209,20 @@ export default function SelfieCapture() {
         nameToSend = composePlaceName(d)
       } catch {}
     }
+    const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
+    const action: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' = pendingAction || 'clockIn'
+    const endpoint = 'https://primary-production-6722.up.railway.app/webhook/clockIn'
+
     const payload = {
       name: nameToSend || `${current.lat.toFixed(5)}, ${current.lng.toFixed(5)}`,
       time: formatTime12h(new Date()),
       image: captured || null,
       location: current,
       employee: user ? { name: user.name, username: user.email } : null,
+      action,
     }
     try {
-      const res = await fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
