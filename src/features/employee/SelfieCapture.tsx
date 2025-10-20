@@ -10,6 +10,7 @@ export default function SelfieCapture() {
   const [captured, setCaptured] = useState<string | null>(null)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
+  const [placeName, setPlaceName] = useState<string | null>(null)
   const { user } = useAuthStore()
 
   useEffect(() => {
@@ -30,7 +31,19 @@ export default function SelfieCapture() {
         return
       }
       navigator.geolocation.getCurrentPosition(
-        (pos) => setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (pos) => {
+          const c = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+          setCoords(c)
+          // Reverse geocode to a human-readable place name (CORS-friendly)
+          fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${c.lat}&longitude=${c.lng}&localityLanguage=en`)
+            .then((r) => r.json())
+            .then((d) => {
+              const composed = d.city || d.locality || d.principalSubdivision || d.localityInfo?.administrative?.[0]?.name
+              const full = d.localityInfo?.informative?.length ? `${composed || ''}${composed ? ', ' : ''}${d.localityInfo.informative.map((x: any) => x.name).slice(0, 2).join(', ')}` : composed
+              setPlaceName(full || d?.plusCode || null)
+            })
+            .catch(() => {})
+        },
         () => setError((prev) => (prev ? prev + ' Location blocked.' : 'Location blocked.')),
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       )
@@ -55,17 +68,45 @@ export default function SelfieCapture() {
     setCaptured(dataUrl)
   }
 
-  const saveAndClose = () => {
+  const retake = () => {
+    setCaptured(null)
+  }
+
+  const formatTime12h = (d: Date) => {
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    const yyyy = d.getFullYear()
+    const mm = pad(d.getMonth() + 1)
+    const dd = pad(d.getDate())
+    let h = d.getHours()
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    h = h % 12
+    if (h === 0) h = 12
+    const hh = h.toString().padStart(2, '0')
+    const mins = pad(d.getMinutes())
+    return `${yyyy}-${mm}-${dd} ${hh}:${mins} ${ampm}`
+  }
+
+  const saveAndClose = async () => {
     if (!coords) {
       setError('Waiting for location... please enable location and try again.')
       return
     }
     // Fire webhook with current location (and selfie if captured)
+    let nameToSend = placeName
+    if (!nameToSend) {
+      try {
+        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${coords.lat}&longitude=${coords.lng}&localityLanguage=en`)
+        const d = await res.json()
+        const composed = d.city || d.locality || d.principalSubdivision || d.localityInfo?.administrative?.[0]?.name
+        const full = d.localityInfo?.informative?.length ? `${composed || ''}${composed ? ', ' : ''}${d.localityInfo.informative.map((x: any) => x.name).slice(0, 2).join(', ')}` : composed
+        nameToSend = full || d?.plusCode || null
+      } catch {}
+    }
     const payload = {
-      user: user ? { name: user.name, username: user.email } : undefined,
-      createdAt: new Date().toISOString(),
+      name: nameToSend || `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`,
+      time: formatTime12h(new Date()),
+      image: captured || null,
       location: coords,
-      selfie: captured || undefined,
     }
     fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
       method: 'POST',
@@ -87,7 +128,11 @@ export default function SelfieCapture() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-md overflow-hidden border bg-black/5">
-            <video ref={videoRef} playsInline muted className="w-full h-64 object-cover bg-black/10" />
+            {captured ? (
+              <img src={captured} alt="Captured" className="w-full h-64 object-cover bg-black/10" />
+            ) : (
+              <video ref={videoRef} playsInline muted className="w-full h-64 object-cover bg-black/10" />
+            )}
           </div>
           <canvas ref={canvasRef} className="hidden" />
 
@@ -98,8 +143,14 @@ export default function SelfieCapture() {
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <div className="flex gap-2 justify-end">
-            <Button variant="outline" onClick={takePhoto}>Take Photo</Button>
-            <Button onClick={saveAndClose}>Save & Close</Button>
+            {!captured ? (
+              <Button variant="outline" onClick={takePhoto}>Take Photo</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={retake}>Retake</Button>
+                <Button onClick={saveAndClose}>Save & Close</Button>
+              </>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">Tip: On mobile, ensure camera and location permissions are allowed.</p>
         </CardContent>
