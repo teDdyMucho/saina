@@ -12,7 +12,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useNavigate } from 'react-router-dom'
 
 export function EmployeeHome() {
-  const { currentSession, isOnBreak, clockIn, clockOut, startBreak, endBreak } = useAttendanceStore()
+  const { currentSession, isOnBreak, clockIn, clockOut, startBreak, endBreak, getTotalBreakTime } = useAttendanceStore()
   const { user } = useAuthStore()
   const navigate = useNavigate()
   const [currentTime, setCurrentTime] = useState(new Date())
@@ -24,6 +24,7 @@ export function EmployeeHome() {
   const [cameraBlocked, setCameraBlocked] = useState(false)
   const [geoError, setGeoError] = useState<string | null>(null)
   const [selfieDataUrl, setSelfieDataUrl] = useState<string | null>(null)
+  const [currentClockInId, setCurrentClockInId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [shift, setShift] = useState({
@@ -104,10 +105,13 @@ export function EmployeeHome() {
     const timer = setInterval(() => {
       setCurrentTime(new Date())
       if (currentSession) {
-        const elapsed = Date.now() - currentSession.timestamp.getTime()
-        const hours = Math.floor(elapsed / 3600000)
-        const minutes = Math.floor((elapsed % 3600000) / 60000)
-        const seconds = Math.floor((elapsed % 60000) / 1000)
+        const totalElapsed = Date.now() - currentSession.timestamp.getTime()
+        const totalBreakTime = getTotalBreakTime()
+        const workingTime = totalElapsed - totalBreakTime
+        
+        const hours = Math.floor(workingTime / 3600000)
+        const minutes = Math.floor((workingTime % 3600000) / 60000)
+        const seconds = Math.floor((workingTime % 60000) / 1000)
         setElapsedTime(
           `${hours.toString().padStart(2, '0')}:${minutes
             .toString()
@@ -116,9 +120,67 @@ export function EmployeeHome() {
       }
     }, 1000)
     return () => clearInterval(timer)
-  }, [currentSession])
+  }, [currentSession, getTotalBreakTime])
 
   const handleAction = async (action: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut') => {
+    // For start/end break, send to webhook directly without selfie
+    if (action === 'startBreak' || action === 'endBreak') {
+      setIsCapturing(true)
+      try {
+        const clockInId = currentClockInId || localStorage.getItem('currentClockInId')
+        if (!clockInId) {
+          setGeoError('No active clock-in session found')
+          setIsCapturing(false)
+          return
+        }
+
+        const now = new Date()
+        const formatTime12h = (d: Date) => {
+          const pad = (n: number) => n.toString().padStart(2, '0')
+          const yyyy = d.getFullYear()
+          const mm = pad(d.getMonth() + 1)
+          const dd = pad(d.getDate())
+          let h = d.getHours()
+          const ampm = h >= 12 ? 'PM' : 'AM'
+          h = h % 12
+          if (h === 0) h = 12
+          const hh = pad(h)
+          const mins = pad(d.getMinutes())
+          return `${yyyy}-${mm}-${dd} ${hh}:${mins} ${ampm}`
+        }
+        const formattedTime = formatTime12h(now)
+
+        // Send to webhook
+        const payload = {
+          clockIn_id: clockInId,
+          action,
+          time: formattedTime,
+          employee: user ? { name: user.name, username: user.email } : null,
+        }
+
+        await fetch('https://primary-production-6722.up.railway.app/webhook/clockIn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+
+        // Update local state
+        if (action === 'startBreak') {
+          startBreak()
+        } else {
+          endBreak()
+          try { localStorage.setItem('breakCompleted', '1') } catch {}
+        }
+      } catch (error) {
+        console.error('Break action error:', error)
+        setGeoError('Failed to process break action')
+      } finally {
+        setIsCapturing(false)
+      }
+      return
+    }
+
+    // For clock in/out, use selfie capture flow
     setIsCapturing(true)
     try {
       localStorage.setItem('pendingAction', action)
@@ -134,71 +196,96 @@ export function EmployeeHome() {
 
   // After returning from the capture route, if selfie + geo exist in localStorage, complete the pending action
   useEffect(() => {
-    const selfie = localStorage.getItem('selfieDataUrl')
-    const geo = localStorage.getItem('lastGeo')
-    const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
-    if (!selfie || !geo || !pendingAction) return
-    try {
-      const { lat, lng } = JSON.parse(geo)
-      setSelfieDataUrl(selfie)
-      setSelfieReady(true)
-      setGpsLocked(true)
+    const checkAndProcess = () => {
+      const selfie = localStorage.getItem('selfieDataUrl')
+      const geo = localStorage.getItem('lastGeo')
+      const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
+      if (!selfie || !geo || !pendingAction) return
 
-      // Check geofence
-      const withinGeofence = isWithinGeofence(
-        lat,
-        lng,
-        shift.lat,
-        shift.lng,
-        shift.radiusMeters
-      )
+      try {
+        const { lat, lng } = JSON.parse(geo)
+        setSelfieDataUrl(selfie)
+        setSelfieReady(true)
+        setGpsLocked(true)
 
-      if (!withinGeofence) {
-        setInsideGeofence(false)
-        setGeoError('You are outside the required geofence area')
-        return
-      }
+        // Check geofence
+        const withinGeofence = isWithinGeofence(
+          lat,
+          lng,
+          shift.lat,
+          shift.lng,
+          shift.radiusMeters
+        )
 
-      setInsideGeofence(true)
-
-      // Apply local state change based on action
-      if (pendingAction === 'clockIn') {
-        clockIn({ lat, lng })
-      } else if (pendingAction === 'startBreak') {
-        startBreak()
-      } else if (pendingAction === 'endBreak') {
-        endBreak()
-        try { localStorage.setItem('breakCompleted', '1') } catch {}
-      } else if (pendingAction === 'clockOut') {
-        clockOut()
-        try { localStorage.removeItem('breakCompleted') } catch {}
-      }
-
-      // Optionally send to webhook if configured
-      const webhook = import.meta.env.VITE_CLOCKIN_WEBHOOK as string | undefined
-      if (webhook) {
-        const payload = {
-          user: { name: user?.name, username: user?.email },
-          timestamp: new Date().toISOString(),
-          location: { lat, lng },
-          selfie,
-          shift: { startTime: shift.startTime, endTime: shift.endTime },
+        if (!withinGeofence) {
+          setInsideGeofence(false)
+          setGeoError('You are outside the required geofence area')
+        } else {
+          setInsideGeofence(true)
+          setGeoError(null)
         }
-        // fire-and-forget; do not block UI
-        fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }).catch(() => {})
+
+        // Apply local state change based on action (proceed even if outside geofence)
+        if (pendingAction === 'clockIn') {
+          clockIn({ lat, lng })
+          try { 
+            localStorage.removeItem('breakCompleted')
+            // Load clockIn_id from localStorage if it was set by SelfieCapture
+            const storedClockInId = localStorage.getItem('currentClockInId')
+            if (storedClockInId) {
+              setCurrentClockInId(storedClockInId)
+            }
+          } catch {}
+        } else if (pendingAction === 'startBreak') {
+          startBreak()
+        } else if (pendingAction === 'endBreak') {
+          endBreak()
+          try { localStorage.setItem('breakCompleted', '1') } catch {}
+        } else if (pendingAction === 'clockOut') {
+          clockOut()
+          try { 
+            localStorage.removeItem('breakCompleted')
+            localStorage.removeItem('currentClockInId')
+            setCurrentClockInId(null)
+          } catch {}
+        }
+
+        // Optionally send to webhook if configured
+        const webhook = import.meta.env.VITE_CLOCKIN_WEBHOOK as string | undefined
+        if (webhook) {
+          const payload = {
+            user: { name: user?.name, username: user?.email },
+            timestamp: new Date().toISOString(),
+            location: { lat, lng },
+            selfie,
+            shift: { startTime: shift.startTime, endTime: shift.endTime },
+          }
+          // fire-and-forget; do not block UI
+          fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).catch(() => {})
+        }
+        // Clear the cached items
+        localStorage.removeItem('selfieDataUrl')
+        localStorage.removeItem('lastGeo')
+        localStorage.removeItem('pendingAction')
+      } catch (e) {
+        // ignore parse errors
+        localStorage.removeItem('selfieDataUrl')
+        localStorage.removeItem('lastGeo')
+        localStorage.removeItem('pendingAction')
       }
-      // Clear the cached items
-      localStorage.removeItem('selfieDataUrl')
-      localStorage.removeItem('lastGeo')
-      localStorage.removeItem('pendingAction')
-    } catch (e) {
-      // ignore parse errors
     }
-  }, [user])
+
+    checkAndProcess()
+    
+    // Also check on window focus (when returning from selfie page)
+    const handleFocus = () => checkAndProcess()
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [user, clockIn, clockOut, startBreak, endBreak, shift])
 
   // Derived UI states
   const disabledReason = null
@@ -271,7 +358,7 @@ export function EmployeeHome() {
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
           <Card className="rounded-2xl border-border/60">
             <CardHeader className="pb-2">
-              <CardTitle>Ready to Clock In?</CardTitle>
+              <CardTitle>Ready to {mainLabel}?</CardTitle>
               <CardDescription>
                 {insideGeofence ? (
                   <span className="text-green-600 dark:text-green-400">You're inside the {shift.radiusMeters}m geofence</span>
@@ -366,20 +453,26 @@ export function EmployeeHome() {
                 <p className="text-sm text-muted-foreground mb-2">Time Elapsed</p>
                 <p className="text-5xl font-bold font-mono">{elapsedTime}</p>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                {!isOnBreak ? (
-                  <Button onClick={startBreak} variant="outline" className="h-12">
-                    <Coffee className="w-4 h-4 mr-2" /> Start Break
+              {!breakDone ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {!isOnBreak ? (
+                    <Button onClick={() => handleAction('startBreak')} variant="outline" className="h-12">
+                      <Coffee className="w-4 h-4 mr-2" /> Start Break
+                    </Button>
+                  ) : (
+                    <Button onClick={() => handleAction('endBreak')} variant="secondary" className="h-12">
+                      <Coffee className="w-4 h-4 mr-2" /> End Break
+                    </Button>
+                  )}
+                  <Button onClick={() => handleAction('clockOut')} variant="destructive" className="h-12">
+                    <LogOutIcon className="w-4 h-4 mr-2" /> Clock Out
                   </Button>
-                ) : (
-                  <Button onClick={endBreak} variant="secondary" className="h-12">
-                    <Coffee className="w-4 h-4 mr-2" /> End Break
-                  </Button>
-                )}
-                <Button onClick={clockOut} variant="destructive" className="h-12">
+                </div>
+              ) : (
+                <Button onClick={() => handleAction('clockOut')} variant="destructive" className="w-full h-12">
                   <LogOutIcon className="w-4 h-4 mr-2" /> Clock Out
                 </Button>
-              </div>
+              )}
               {isOnBreak && (
                 <Badge variant="warning" className="w-full justify-center py-2">On Break</Badge>
               )}

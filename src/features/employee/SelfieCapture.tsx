@@ -15,6 +15,14 @@ export default function SelfieCapture() {
   const [sending, setSending] = useState<boolean>(false)
   const { user } = useAuthStore()
 
+  // Read pending action to customize UI
+  const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
+  const actionLabel = 
+    pendingAction === 'startBreak' ? 'Start Break' :
+    pendingAction === 'endBreak' ? 'End Break' :
+    pendingAction === 'clockOut' ? 'Clock Out' :
+    'Clock In'
+
   // Actively request geolocation and resolve a human-readable place name
   async function requestLocationAndName(): Promise<{ lat: number; lng: number } | null> {
     if (locLoading) return null
@@ -211,7 +219,12 @@ export default function SelfieCapture() {
     }
     const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
     const action: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' = pendingAction || 'clockIn'
-    const endpoint = 'https://primary-production-6722.up.railway.app/webhook/clockIn'
+    const endpoint = action === 'clockOut' 
+      ? 'https://primary-production-6722.up.railway.app/webhook/ClockOut'
+      : 'https://primary-production-6722.up.railway.app/webhook/clockIn'
+
+    // Generate clockIn_id for new clock-in sessions
+    const clockInId = action === 'clockIn' ? crypto.randomUUID() : null
 
     const payload = {
       name: nameToSend || `${current.lat.toFixed(5)}, ${current.lng.toFixed(5)}`,
@@ -220,6 +233,7 @@ export default function SelfieCapture() {
       location: current,
       employee: user ? { name: user.name, username: user.email } : null,
       action,
+      ...(clockInId && { clockIn_id: clockInId }),
     }
     try {
       const res = await fetch(endpoint, {
@@ -229,9 +243,35 @@ export default function SelfieCapture() {
       })
       const text = await res.text().catch(() => '')
 
-      // Persist for parent page to complete clock-in
+      // For Clock Out, wait for "Done" response before navigating
+      if (action === 'clockOut') {
+        if (res.ok && /done/i.test(text)) {
+          // Clear session data on successful clock out
+          localStorage.removeItem('selfieDataUrl')
+          localStorage.removeItem('lastGeo')
+          localStorage.removeItem('pendingAction')
+          if (window.opener) {
+            window.close()
+          } else {
+            window.location.replace('/employee')
+          }
+          return
+        } else {
+          // If no "Done" response for clock out, show error and don't navigate
+          setError('Waiting for server confirmation... Please try again if this persists.')
+          setSending(false)
+          return
+        }
+      }
+
+      // For other actions (clockIn, startBreak, endBreak), proceed normally
       if (captured) localStorage.setItem('selfieDataUrl', captured)
       localStorage.setItem('lastGeo', JSON.stringify(current))
+      
+      // Store clockIn_id for clock-in action
+      if (clockInId) {
+        localStorage.setItem('currentClockInId', clockInId)
+      }
 
       // If backend confirms with 'Done', go home/close immediately
       if (res.ok && /done/i.test(text)) {
@@ -243,11 +283,22 @@ export default function SelfieCapture() {
         return
       }
     } catch (e) {
-      // network errors fall through to default close/navigate
+      // For clock out, show error and don't navigate
+      if (action === 'clockOut') {
+        setError('Network error. Please check your connection and try again.')
+        setSending(false)
+        return
+      }
+      // For other actions, fall through to default behavior
     }
-    // Default behavior if no explicit 'Done' received
+    // Default behavior if no explicit 'Done' received (for non-clockOut actions)
     if (captured) localStorage.setItem('selfieDataUrl', captured)
     localStorage.setItem('lastGeo', JSON.stringify(current))
+    
+    // Store clockIn_id for clock-in action
+    if (clockInId) {
+      localStorage.setItem('currentClockInId', clockInId)
+    }
     if (window.opener) {
       window.close()
     } else {
@@ -260,7 +311,7 @@ export default function SelfieCapture() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <Card className="w-full max-w-xl">
         <CardHeader>
-          <CardTitle>Selfie & Location</CardTitle>
+          <CardTitle>{actionLabel} - Selfie & Location</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-md overflow-hidden border bg-black/5">
@@ -290,7 +341,7 @@ export default function SelfieCapture() {
               <>
                 <Button variant="outline" onClick={retake}>Retake</Button>
                 <Button onClick={saveAndClose} disabled={!coords || locLoading || sending}>
-                  {sending ? 'Saving…' : locLoading ? 'Getting location…' : 'Save & Close'}
+                  {sending ? 'Saving…' : locLoading ? 'Getting location…' : actionLabel}
                 </Button>
               </>
             )}
