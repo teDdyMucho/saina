@@ -145,11 +145,27 @@ export default function SelfieCapture() {
   }, [captured, stream])
 
   const composePlaceName = (d: any) => {
-    const province = d?.principalSubdivision || d?.localityInfo?.administrative?.find((x: any) => /province/i.test(x?.description || ''))?.name
-    const locality = d?.locality || d?.city || d?.localityInfo?.administrative?.find((x: any) => /city|municipality|district/i.test(x?.description || ''))?.name
+    const admin = d?.localityInfo?.administrative || []
+    const findAdmin = (re: RegExp) => admin.find((x: any) => re.test((x?.description || '') + ' ' + (x?.name || '')))?.name
+
+    const province = d?.principalSubdivision || findAdmin(/province/i)
+    const locality = d?.locality || d?.city || findAdmin(/city|municipality|town/i)
+    const barangayRaw = findAdmin(/barangay|village|suburb|neighbourhood|district/i)
     const country = (d?.countryName || '').toLowerCase()
-    const left = [province, locality].filter(Boolean).join(', ')
-    const result = `${left}${country ? ` ${country}` : ''}`.trim()
+
+    const brgy = barangayRaw ? `brgy. ${barangayRaw}`.toLowerCase() : ''
+    const locLower = locality ? String(locality).toLowerCase() : ''
+
+    const partsLeft: string[] = []
+    if (brgy) partsLeft.push(brgy)
+    if (locLower) partsLeft.push(locLower)
+
+    let left = ''
+    if (partsLeft.length > 0) left = partsLeft.join(', ')
+    // province appended without comma between locality and province to match sample formatting
+    const mid = province ? `${left ? left + ' ' : ''}${province}` : left
+    const result = `${mid}${country ? `, ${country}` : ''}`.trim()
+
     return result || d?.plusCode || d?.locality || d?.principalSubdivision || null
   }
 
