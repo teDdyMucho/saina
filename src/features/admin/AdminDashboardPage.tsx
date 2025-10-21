@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -15,12 +15,12 @@ import {
   MessageSquare,
   Flag,
   User,
-  RefreshCw,
   MapPin,
   X
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 
-// Mock data with types
+// Types
 interface Employee {
   id: string
   name: string
@@ -39,86 +39,7 @@ interface KPIStat {
   color: string
   sparkline: number[]
 }
-
-const mockStats: KPIStat[] = [
-  {
-    label: 'Present Today',
-    value: 24,
-    delta: '+2 from yesterday',
-    icon: Users,
-    color: 'text-emerald-600',
-    sparkline: [18, 20, 19, 22, 21, 23, 24],
-  },
-  {
-    label: 'Late Today',
-    value: 3,
-    delta: 'Avg 8 min late',
-    icon: Clock,
-    color: 'text-amber-600',
-    sparkline: [5, 4, 6, 3, 4, 2, 3],
-  },
-  {
-    label: 'On Break',
-    value: 5,
-    delta: 'Currently active',
-    icon: Coffee,
-    color: 'text-sky-600',
-    sparkline: [3, 4, 3, 5, 4, 6, 5],
-  },
-  {
-    label: 'Flags',
-    value: 2,
-    delta: 'Missing clock-out',
-    icon: AlertCircle,
-    color: 'text-rose-600',
-    sparkline: [4, 3, 2, 3, 1, 2, 2],
-  },
-]
-
-const mockActiveEmployees: Employee[] = [
-  {
-    id: '1',
-    name: 'John Doe',
-    clockIn: '08:55 AM',
-    status: 'working',
-    location: 'Main Office',
-    duration: '3h 25m',
-  },
-  {
-    id: '2',
-    name: 'Jane Smith',
-    clockIn: '09:10 AM',
-    status: 'break',
-    location: 'Main Office',
-    duration: '3h 10m',
-    lateBy: 10,
-  },
-  {
-    id: '3',
-    name: 'Mike Johnson',
-    clockIn: '08:58 AM',
-    status: 'working',
-    location: 'Branch Office',
-    duration: '3h 22m',
-  },
-  {
-    id: '4',
-    name: 'Sarah Williams',
-    clockIn: '09:15 AM',
-    status: 'working',
-    location: 'Main Office',
-    duration: '3h 5m',
-    lateBy: 15,
-  },
-  {
-    id: '5',
-    name: 'David Brown',
-    clockIn: '09:00 AM',
-    status: 'working',
-    location: 'Branch Office',
-    duration: '3h 20m',
-  },
-]
+ 
 
 // Sparkline SVG component
 function Sparkline({ data, color }: { data: number[]; color: string }) {
@@ -152,15 +73,85 @@ export function AdminDashboardPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedSite, setSelectedSite] = useState<string | null>(null)
   const [selectedStatus, setSelectedStatus] = useState<string | null>(null)
+  const [loading, setLoading] = useState<boolean>(false)
+  const [employeesNow, setEmployeesNow] = useState<Employee[]>([])
+  const [stats, setStats] = useState<KPIStat[]>([])
 
-  const filteredEmployees = mockActiveEmployees.filter((emp) => {
+  // Load today's activity from Supabase
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const now = new Date()
+        const start = new Date(now); start.setHours(0,0,0,0)
+        const end = new Date(now); end.setHours(23,59,59,999)
+        const startStr = start.toISOString().split('T')[0]
+        const endStr = end.toISOString().split('T')[0]
+
+        const { data: ins } = await supabase
+          .from('clock_in')
+          .select('*')
+          .gte('created_at', startStr)
+          .lte('created_at', endStr + 'T23:59:59')
+          .order('created_at', { ascending: true })
+
+        // Map current employees
+        const list: Employee[] = (ins || []).map((ci: any) => {
+          const dateStr = new Date(ci.created_at).toISOString().split('T')[0]
+          const clockInTime = ci.clockIn || to12h(new Date(ci.created_at).toISOString().substring(11,16))
+          const inDt = parseTimeToDate(ci.clockIn, dateStr) || new Date(ci.created_at)
+          const nowDt = new Date()
+          let workedMin = Math.max(0, Math.floor((nowDt.getTime() - inDt.getTime())/60000))
+          // Subtract ongoing break if started
+          if (ci.startBreak && !ci.endBreak) {
+            const b1 = parseTimeToDate(ci.startBreak, dateStr)
+            if (b1) workedMin = Math.max(0, workedMin - Math.max(0, Math.floor((nowDt.getTime()-b1.getTime())/60000)))
+          }
+          const duration = formatMinutes(workedMin)
+          const status: 'working'|'break' = ci.startBreak && !ci.endBreak ? 'break' : 'working'
+          // Late vs 9:00 AM baseline (simple)
+          let lateBy: number | undefined
+          const baseline = new Date(inDt); baseline.setHours(9,0,0,0)
+          if (inDt > baseline) lateBy = Math.floor((inDt.getTime()-baseline.getTime())/60000)
+          return {
+            id: String(ci.id),
+            name: ci.name || ci.user_name || 'Unknown',
+            clockIn: clockInTime,
+            status,
+            location: ci.location || '—',
+            duration,
+            lateBy,
+          }
+        })
+
+        setEmployeesNow(list)
+
+        // Stats
+        const present = list.length
+        const late = list.filter(e => (e.lateBy ?? 0) > 0).length
+        const onBreak = list.filter(e => e.status === 'break').length
+        const flags = 0
+        setStats([
+          { label: 'Present Today', value: present, delta: '', icon: Users, color: 'text-emerald-600', sparkline: [] },
+          { label: 'Late Today', value: late, delta: '', icon: Clock, color: 'text-amber-600', sparkline: [] },
+          { label: 'On Break', value: onBreak, delta: 'Currently active', icon: Coffee, color: 'text-sky-600', sparkline: [] },
+          { label: 'Flags', value: flags, delta: 'Missing clock-out', icon: AlertCircle, color: 'text-rose-600', sparkline: [] },
+        ])
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const filteredEmployees = employeesNow.filter((emp) => {
     const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesSite = !selectedSite || emp.location === selectedSite
     const matchesStatus = !selectedStatus || emp.status === selectedStatus
     return matchesSearch && matchesSite && matchesStatus
   })
 
-  const sites = Array.from(new Set(mockActiveEmployees.map((e) => e.location)))
+  const sites = Array.from(new Set(employeesNow.map((e) => e.location)))
 
   const clearFilters = () => {
     setSearchQuery('')
@@ -180,7 +171,7 @@ export function AdminDashboardPage() {
 
       {/* Hero KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-        {mockStats.map((stat, index) => {
+        {stats.map((stat, index) => {
           const Icon = stat.icon
           return (
             <motion.div
@@ -202,7 +193,7 @@ export function AdminDashboardPage() {
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <TrendingUp className="w-3 h-3" />
                         <span className="hidden sm:inline">{stat.delta}</span>
-                        <span className="sm:hidden">{stat.delta.split(' ')[0]}</span>
+                        <span className="sm:hidden">{stat.delta ? stat.delta.split(' ')[0] : ''}</span>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1 md:gap-2">
@@ -389,41 +380,42 @@ export function AdminDashboardPage() {
         </Card>
       </motion.div>
 
-      {/* Live Location Map */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, delay: 0.3 }}
-      >
-        <Card className="rounded-xl md:rounded-2xl bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl border-white/60 dark:border-white/10">
-          <CardHeader className="px-4 md:px-6">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <CardTitle className="text-base md:text-lg">Live Location Map</CardTitle>
-              <div className="flex items-center gap-2">
-                <select className="h-8 px-2 text-xs md:text-sm border rounded-md bg-background flex-1 sm:flex-initial">
-                  <option>All Sites</option>
-                  <option>Main Office</option>
-                  <option>Branch Office</option>
-                </select>
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                  <RefreshCw className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="px-4 md:px-6">
-            <div className="w-full h-48 md:h-64 bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900 rounded-xl flex items-center justify-center border">
-              <div className="text-center px-4">
-                <MapPin className="w-10 h-10 md:w-12 md:h-12 text-muted-foreground mx-auto mb-2" />
-                <p className="text-sm md:text-base text-muted-foreground font-medium">Map view with employee locations</p>
-                <p className="text-xs md:text-sm text-muted-foreground">
-                  {filteredEmployees.length} employees currently tracked
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+      {/* Live Location Map removed */}
     </div>
   )
+}
+
+// Helpers
+function to12h(hhmm: string) {
+  if (!hhmm) return hhmm
+  const [hStr, mStr] = hhmm.split(':')
+  let h = Number(hStr)
+  const ampm = h >= 12 ? 'pm' : 'am'
+  h = h % 12
+  if (h === 0) h = 12
+  const hPad = h < 10 ? `0${h}` : String(h)
+  return `${hPad}:${mStr} ${ampm}`
+}
+
+function parseTimeToDate(timeStr?: string | null, dateStr?: string): Date | null {
+  if (!timeStr || !dateStr) return null
+  try {
+    if (timeStr.includes('T') || timeStr.includes('-')) return new Date(timeStr)
+    const m = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i)
+    if (!m) return null
+    let h = parseInt(m[1], 10)
+    const min = parseInt(m[2], 10)
+    const period = m[3].toUpperCase()
+    if (period === 'PM' && h !== 12) h += 12
+    if (period === 'AM' && h === 12) h = 0
+    const d = new Date(dateStr)
+    d.setHours(h, min, 0, 0)
+    return d
+  } catch { return null }
+}
+
+function formatMinutes(min: number) {
+  const h = Math.floor(min/60)
+  const m = min % 60
+  return `${h}h ${m}m`
 }

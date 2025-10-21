@@ -11,6 +11,7 @@ import { AdminDashboardPage } from './features/admin/AdminDashboardPage'
 import { Schedules } from './features/admin/Schedules'
 import { Approvals } from './features/admin/Approvals'
 import { Reports } from './features/admin/Reports'
+import ReportUserDetail from './features/admin/ReportUserDetail'
 
 function ProtectedRoute({
   children,
@@ -140,6 +141,16 @@ function App() {
             <ProtectedRoute requireRole="admin">
               <Layout>
                 <Reports />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/reports/:userName"
+          element={
+            <ProtectedRoute requireRole="admin">
+              <Layout>
+                <ReportUserDetail />
               </Layout>
             </ProtectedRoute>
           }

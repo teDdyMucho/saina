@@ -36,6 +36,8 @@ export function EmployeeHome() {
     radiusMeters: 100,
   })
 
+  // Weekly summary removed; Timesheet page owns these KPIs now
+
   // Load clockIn_id from localStorage on mount
   useEffect(() => {
     try {
@@ -112,6 +114,8 @@ export function EmployeeHome() {
     fetchToday()
   }, [user])
 
+  // Weekly summary removed
+
   // Inline camera is disabled; use dedicated capture route instead
 
   useEffect(() => {
@@ -153,16 +157,13 @@ export function EmployeeHome() {
         const now = new Date()
         const formatTime12h = (d: Date) => {
           const pad = (n: number) => n.toString().padStart(2, '0')
-          const yyyy = d.getFullYear()
-          const mm = pad(d.getMonth() + 1)
-          const dd = pad(d.getDate())
           let h = d.getHours()
           const ampm = h >= 12 ? 'PM' : 'AM'
           h = h % 12
           if (h === 0) h = 12
           const hh = pad(h)
           const mins = pad(d.getMinutes())
-          return `${yyyy}-${mm}-${dd} ${hh}:${mins} ${ampm}`
+          return `${hh}:${mins} ${ampm}`
         }
         const formattedTime = formatTime12h(now)
 
@@ -524,48 +525,7 @@ export function EmployeeHome() {
         </motion.div>
       )}
 
-      {/* Row C: KPI mini cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
-          <Card className="rounded-2xl">
-            <CardContent className="p-5 lg:p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">This Week Worked</p>
-                  <p className="text-2xl font-bold">24h 12m</p>
-                </div>
-                <Timer className="w-5 h-5 text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
-          <Card className="rounded-2xl">
-            <CardContent className="p-5 lg:p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Breaks</p>
-                  <p className="text-2xl font-bold">3h</p>
-                </div>
-                <Coffee className="w-5 h-5 text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }}>
-          <Card className="rounded-2xl">
-            <CardContent className="p-5 lg:p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Late Minutes</p>
-                  <p className="text-2xl font-bold text-amber-600">5m</p>
-                </div>
-                <AlertTriangle className="w-5 h-5 text-amber-600" />
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
+      {/* Weekly summary KPIs removed; see Timesheet page */}
     </div>
   )
 }

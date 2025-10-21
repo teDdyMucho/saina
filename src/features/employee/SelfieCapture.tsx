@@ -187,16 +187,13 @@ export default function SelfieCapture() {
 
   const formatTime12h = (d: Date) => {
     const pad = (n: number) => n.toString().padStart(2, '0')
-    const yyyy = d.getFullYear()
-    const mm = pad(d.getMonth() + 1)
-    const dd = pad(d.getDate())
     let h = d.getHours()
     const ampm = h >= 12 ? 'PM' : 'AM'
     h = h % 12
     if (h === 0) h = 12
     const hh = h.toString().padStart(2, '0')
     const mins = pad(d.getMinutes())
-    return `${yyyy}-${mm}-${dd} ${hh}:${mins} ${ampm}`
+    return `${hh}:${mins} ${ampm}`
   }
 
   const saveAndClose = async () => {

@@ -105,6 +105,8 @@ export function Schedules() {
     startDate: '',
     endDate: '',
   })
+  // Track editing of an existing schedule row
+  const [editingAssignedId, setEditingAssignedId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitMsg, setSubmitMsg] = useState<string | null>(null)
   const [templateSubmitting, setTemplateSubmitting] = useState(false)
@@ -124,6 +126,10 @@ export function Schedules() {
       weekdays: string[]
     }
   }>>([])
+
+  // Delete confirmation modal state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [confirmDeleteInfo, setConfirmDeleteInfo] = useState<{ employee?: string; shift?: string } | null>(null)
 
   // Employees from Supabase `user` table
   const [employees, setEmployees] = useState<Array<{ id: number | string; name: string; user_name?: string }>>([])
@@ -198,11 +204,21 @@ export function Schedules() {
       startDate: s.startDate || '',
       endDate: s.endDate || '',
     })
-    setIsFormOpen(true)
+    setEditingAssignedId(s.id)
+    setIsFormOpen(false)
   }
 
-  const deleteAssigned = (id: string) => {
+  const deleteAssigned = async (id: string) => {
+    // Optimistic UI removal
+    const prev = assigned
     setAssigned((list) => list.filter((x) => x.id !== id))
+    const { error } = await supabase.from('schedule').delete().eq('id', id)
+    if (error) {
+      // rollback on failure
+      setAssigned(prev)
+      console.error('Failed to delete schedule:', error)
+      alert('Failed to delete. Please try again.')
+    }
   }
 
   // Load shift templates from Supabase `template` table
@@ -338,40 +354,39 @@ export function Schedules() {
     const emp = employees.find((x) => String(x.id) === String(assign.employeeId))
     setSubmitting(true)
     try {
-      const res = await fetch('https://primary-production-6722.up.railway.app/webhook/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeId: assign.employeeId,
-          employeeName: emp?.name,
-          user_name: emp?.user_name,
-          shiftTemplateId: assign.shiftId,
-          shiftName: shift?.name,
-          startDate: assign.startDate,
-          endDate: assign.endDate || null,
-          schedule: shift ? {
-            startTime: to12h(shift.startTime),
-            endTime: to12h(shift.endTime),
-            breakTime: `${to12h(shift.breakStart)} - ${to12h(shift.breakEnd)}`,
-            weekdays: shift.weekdays.map((i) => weekdayNames[i]),
-          } : null,
-          createdAt: new Date().toISOString(),
-        }),
-      })
-      const text = await res.text().catch(() => '')
-      // Determine success: HTTP ok AND (JSON {success:true} OR has id OR contains 'done')
-      let payload: any = null
-      try { payload = JSON.parse(text) } catch {}
-      const logicalOk = res.ok && (
-        (payload && (payload.success === true || payload.ok === true || payload.id)) || /\bdone\b/i.test(text)
-      )
-      setSubmitMsg(logicalOk ? 'Schedule sent' : `Failed to send: ${text || res.status}`)
-      if (logicalOk) {
-        await loadSchedules()
-        setAssign({ employeeId: '', shiftId: '', startDate: '', endDate: '' })
+      if (editingAssignedId) {
+        // Update existing schedule in Supabase
+        const { error } = await supabase
+          .from('schedule')
+          .update({
+            shift_name: shift?.name || null,
+            start_date: assign.startDate,
+            end_date: assign.endDate || null,
+          })
+          .eq('id', editingAssignedId)
+        if (error) throw error
+        setSubmitMsg('Schedule updated')
+      } else {
+        // Create new schedule in Supabase
+        const { error } = await supabase
+          .from('schedule')
+          .insert({
+            employee_name: emp?.name || null,
+            user_name: emp?.user_name || null,
+            shift_name: shift?.name || null,
+            start_date: assign.startDate,
+            end_date: assign.endDate || null,
+          })
+        if (error) throw error
+        setSubmitMsg('Schedule assigned')
       }
+      await loadSchedules()
+      setAssign({ employeeId: '', shiftId: '', startDate: '', endDate: '' })
+      setEditingAssignedId(null)
+      setIsFormOpen(false)
     } catch (err: any) {
-      setSubmitMsg('Network error')
+      console.error('Assign/save schedule error:', err)
+      setSubmitMsg('Failed to save schedule')
     } finally {
       setSubmitting(false)
     }
@@ -473,7 +488,7 @@ export function Schedules() {
                   <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => editAssigned(s)} title="Edit">
                     <Pencil className="w-3.5 h-3.5" />
                   </Button>
-                  <Button size="sm" variant="destructive" className="h-7 w-7 p-0" onClick={() => deleteAssigned(s.id)} title="Delete">
+                  <Button size="sm" variant="destructive" className="h-7 w-7 p-0" onClick={() => { setConfirmDeleteId(s.id); setConfirmDeleteInfo({ employee: s.employeeName, shift: s.shiftName }) }} title="Delete">
                     <Trash className="w-3.5 h-3.5" />
                   </Button>
                 </div>
@@ -506,6 +521,85 @@ export function Schedules() {
                         </div>
                       </>
                     )}
+
+      {/* Edit Assigned Schedule Modal */}
+      {editingAssignedId && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <Card className="w-full max-w-lg">
+            <CardHeader>
+              <CardTitle>Edit Assigned Schedule</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={handleAssign}>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Employee</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.employeeId}
+                    onChange={(e) => setAssign((a) => ({ ...a, employeeId: e.target.value }))}
+                    disabled
+                  >
+                    <option value="">{loadingEmployees ? 'Loading...' : 'Select employee'}</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={String(e.id)}>{e.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">Employee cannot be changed for an existing assignment.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Shift Template</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.shiftId}
+                    onChange={(e) => setAssign((a) => ({ ...a, shiftId: e.target.value }))}
+                  >
+                    <option value="">Select shift</option>
+                    {shiftTemplates.map((shift) => (
+                      <option key={shift.id} value={shift.id}>{shift.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Start Date</label>
+                    <Input type="date" value={assign.startDate} onChange={(e) => setAssign((a) => ({ ...a, startDate: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">End Date (Optional)</label>
+                    <Input type="date" value={assign.endDate} onChange={(e) => setAssign((a) => ({ ...a, endDate: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => { setEditingAssignedId(null); setSubmitMsg(null) }}>Cancel</Button>
+                  <Button type="submit" disabled={submitting}>{submitting ? 'Saving...' : 'Save Changes'}</Button>
+                </div>
+                {submitMsg && <p className="text-xs text-muted-foreground mt-2">{submitMsg}</p>}
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Confirm Delete Modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Delete Schedule</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p>Are you sure you want to delete this schedule{confirmDeleteInfo?.employee ? ` for ${confirmDeleteInfo.employee}` : ''}{confirmDeleteInfo?.shift ? ` (${confirmDeleteInfo.shift})` : ''}? This action cannot be undone.</p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => { setConfirmDeleteId(null); setConfirmDeleteInfo(null) }}>Cancel</Button>
+                <Button variant="destructive" onClick={async () => { const id = confirmDeleteId; setConfirmDeleteId(null); setConfirmDeleteInfo(null); if (id) await deleteAssigned(id) }}>Delete</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
                   </div>
                   <Badge variant="secondary">{s.recurrence || 'weekly'}</Badge>
                 </div>
@@ -515,11 +609,11 @@ export function Schedules() {
         )}
       </div>
 
-      {/* New Schedule Form */}
+      {/* New / Edit Schedule Form */}
       {isFormOpen && (
         <Card>
           <CardHeader>
-            <CardTitle>Assign New Schedule</CardTitle>
+            <CardTitle>{editingAssignedId ? 'Edit Assigned Schedule' : 'Assign New Schedule'}</CardTitle>
           </CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={handleAssign}>
@@ -568,7 +662,7 @@ export function Schedules() {
               </div>
 
               <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting ? 'Sending...' : 'Assign Schedule'}
+                {submitting ? 'Saving...' : (editingAssignedId ? 'Save Changes' : 'Assign Schedule')}
               </Button>
               {submitMsg && <p className="text-xs text-muted-foreground">{submitMsg}</p>}
             </form>
