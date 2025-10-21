@@ -5,13 +5,12 @@ import ModernLogin from './features/auth/ModernLogin'
 import EmployeeRegister from './features/auth/EmployeeRegister'
 import { EmployeeHome } from './features/employee/EmployeeHome'
 import { Timesheet } from './features/employee/Timesheet'
-import { LeaveRequest } from './features/employee/LeaveRequest'
 import SelfieCapture from './features/employee/SelfieCapture'
 import { AdminDashboardPage } from './features/admin/AdminDashboardPage'
 import { Schedules } from './features/admin/Schedules'
-import { Approvals } from './features/admin/Approvals'
 import { Reports } from './features/admin/Reports'
 import ReportUserDetail from './features/admin/ReportUserDetail'
+import ProfilePage from './features/profile/ProfilePage'
 
 function ProtectedRoute({
   children,
@@ -52,16 +51,7 @@ function App() {
           }
         />
         
-        <Route
-          path="/register"
-          element={
-            isAuthenticated ? (
-              <Navigate to="/employee" replace />
-            ) : (
-              <EmployeeRegister />
-            )
-          }
-        />
+        {/* Registration is admin-only now; public route removed */}
 
         {/* Employee Routes */}
         <Route
@@ -93,16 +83,6 @@ function App() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="/employee/leave"
-          element={
-            <ProtectedRoute requireRole="employee">
-              <Layout>
-                <LeaveRequest />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
 
         {/* Admin Routes */}
         <Route
@@ -115,22 +95,23 @@ function App() {
             </ProtectedRoute>
           }
         />
+        {/* Admin: Add New Employee */}
+        <Route
+          path="/admin/employees/new"
+          element={
+            <ProtectedRoute requireRole="admin">
+              <Layout>
+                <EmployeeRegister />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/admin/schedules"
           element={
             <ProtectedRoute requireRole="admin">
               <Layout>
                 <Schedules />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin/approvals"
-          element={
-            <ProtectedRoute requireRole="admin">
-              <Layout>
-                <Approvals />
               </Layout>
             </ProtectedRoute>
           }
@@ -151,6 +132,18 @@ function App() {
             <ProtectedRoute requireRole="admin">
               <Layout>
                 <ReportUserDetail />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Profile */}
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <ProfilePage />
               </Layout>
             </ProtectedRoute>
           }

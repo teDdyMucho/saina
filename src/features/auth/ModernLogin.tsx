@@ -8,7 +8,6 @@ import { ToggleGroup } from '@/components/ui/toggle-group'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Toast, ToastContainer } from '@/components/ui/toast'
 import { 
-  ArrowRightCircle, 
   Loader2,
   Lock,
   Eye,
@@ -50,7 +49,7 @@ function useLogin() {
     try {
       const { data, error: dbError } = await supabase
         .from('user')
-        .select('id, user_name, password, name')
+        .select('*')
         .eq('user_name', username)
         .eq('password', password)
         .maybeSingle()
@@ -67,7 +66,11 @@ function useLogin() {
         return { success: false, role, username }
       }
 
-      return { success: true, role, username, fullName: data.name as string | undefined }
+      // Determine role from DB record (use either `role` or `Role` column; default to employee)
+      const dbRoleRaw = (data as any)?.role ?? (data as any)?.Role
+      const dbRole: 'employee' | 'admin' = String(dbRoleRaw || '').toLowerCase() === 'admin' ? 'admin' : 'employee'
+
+      return { success: true, role: dbRole, username, fullName: (data as any)?.name as string | undefined }
     } catch (e) {
       setLoading(false)
       setError('Login failed. Please try again later.')
@@ -130,6 +133,8 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
     variant: 'success' | 'error'
   }>({ show: false, title: '', variant: 'success' })
 
+  const [inlineErrorMsg, setInlineErrorMsg] = useState<string | null>(null)
+
   const [emailError, setEmailError] = useState(false)
   const [passwordError, setPasswordError] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
@@ -151,13 +156,26 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
     }
 
     const result = await signIn()
-    
+
     if (result.success) {
+      // If admin mode selected but DB role is not admin, show generic invalid credentials
+      if (role === 'admin' && result.role !== 'admin') {
+        setInlineErrorMsg('Invalid username or password')
+        setTimeout(() => setInlineErrorMsg(null), 3000)
+        return
+      }
+      // If employee mode selected but DB role is not employee, show generic invalid credentials
+      if (role === 'employee' && result.role !== 'employee') {
+        setInlineErrorMsg('Invalid username or password')
+        setTimeout(() => setInlineErrorMsg(null), 3000)
+        return
+      }
+
       // Show success toast
       setToast({
         show: true,
         title: 'Success!',
-        description: `Signed in as ${role.charAt(0).toUpperCase() + role.slice(1)}`,
+        description: `Signed in as ${result.role.charAt(0).toUpperCase() + result.role.slice(1)}`,
         variant: 'success'
       })
 
@@ -170,12 +188,8 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
         navigate(result.role === 'admin' ? '/admin' : '/employee')
       }, 1000)
     } else {
-      setToast({
-        show: true,
-        title: 'Error',
-        description: error || 'Failed to sign in',
-        variant: 'error'
-      })
+      setInlineErrorMsg(error || 'Invalid username or password')
+      setTimeout(() => setInlineErrorMsg(null), 3000)
     }
   }
 
@@ -191,9 +205,9 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
   }, [toast])
 
   return (
-    <div className="min-h-screen w-full relative overflow-hidden bg-gradient-to-br from-blue-50 via-indigo-50 to-blue-100 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900">
+    <div className="min-h-screen w-full relative overflow-hidden bg-gradient-to-br from-muted/50 via-secondary/20 to-primary/10 dark:from-background dark:via-muted/20 dark:to-background">
       {/* Animated background pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-blue-100/50 via-transparent to-transparent dark:from-indigo-900/20" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-secondary/30 via-transparent to-transparent dark:from-primary/20" />
       
       {/* Toast notifications */}
       <AnimatePresence>
@@ -225,30 +239,22 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
           className="w-full max-w-[420px]"
         >
           {/* Glassmorphic card */}
-          <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-blue-500/10 dark:shadow-indigo-500/10 p-8">
-            {/* Brand icon with glow effect */}
-            <motion.div 
-              className="flex justify-center mb-6"
-              whileHover={{ scale: 1.05 }}
-              transition={{ type: "spring", stiffness: 400, damping: 10 }}
-            >
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-600 rounded-full blur-md opacity-50 group-hover:opacity-75 transition-opacity" />
-                <div className="relative w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-lg">
-                  <ArrowRightCircle className="w-8 h-8 text-white" strokeWidth={2.5} />
-                </div>
-              </div>
-            </motion.div>
+          <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-primary/20 p-8">
+            {/* Brand logo (no background) */}
+            
 
             {/* Title */}
             <div className="text-center mb-8">
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                Welcome to STAR
-              </h1>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Shift Time & Attendance Record
               </p>
             </div>
+
+            {inlineErrorMsg && (
+              <div className="mb-4">
+                <p className="text-center text-sm text-red-600 dark:text-red-400">{inlineErrorMsg}</p>
+              </div>
+            )}
 
             {/* Form */}
             <form onSubmit={handleSubmit} className="space-y-6">
@@ -278,7 +284,7 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
                         setError(null)
                       }}
                       className={cn(
-                        "pl-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         error && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
@@ -325,7 +331,7 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
                         setError(null)
                       }}
                       className={cn(
-                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         error && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
@@ -365,27 +371,21 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
                 </motion.div>
               </div>
 
-              {/* Remember me & Forgot password */}
-              <div className="flex items-center justify-between">
+              {/* Remember me */}
+              <div className="flex items-center justify-start">
                 <Checkbox
                   id="remember"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
                   label="Remember me"
                 />
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
-                >
-                  Forgot password?
-                </button>
               </div>
 
               {/* Sign in button */}
               <Button
                 type="submit"
                 disabled={loading || !isValid}
-                className="w-full h-11 text-sm font-medium bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                className="w-full h-11 text-sm font-medium bg-primary hover:bg-primary/90 focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 {loading ? (
                   <>
@@ -402,15 +402,7 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
                 Demo mode: Enter any username to continue
               </p>
 
-              {/* Register link - Only for Employee */}
-              {role === 'employee' && (
-                <p className="text-sm text-center text-muted-foreground">
-                  Don't have an account?{' '}
-                  <a href="/register" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium">
-                    Create Account
-                  </a>
-                </p>
-              )}
+              {/* Registration link removed: only admins can create accounts */}
 
               {/* SSO removed */}
             </form>

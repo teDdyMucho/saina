@@ -2,23 +2,27 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { Button } from './ui/button'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
+import { supabase } from '@/lib/supabase'
 import {
   LayoutDashboard,
   Calendar,
-  CheckSquare,
   FileText,
   Settings,
   LogOut,
   Home,
   Clock,
-  FileCheck,
   Moon,
   Sun,
   Menu,
   X,
   Timer,
+  ChevronRight,
+  Bell,
+  User,
+  UserPlus,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore()
@@ -26,6 +30,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
   // Helpers
   const initials = useMemo(() => {
@@ -36,21 +41,122 @@ export function Layout({ children }: { children: React.ReactNode }) {
     return (first + second).toUpperCase()
   }, [user?.name])
 
-  // Mock next shift: 09:00 today or tomorrow
-  const nextShiftIn = useMemo(() => {
-    const now = new Date()
-    const target = new Date(now)
-    target.setHours(9, 0, 0, 0)
-    if (now > target) {
-      target.setDate(target.getDate() + 1)
+  // Next shift ETA derived from Supabase schedule/template
+  const [nextShiftIn, setNextShiftIn] = useState<string>('—')
+
+  useEffect(() => {
+    const to24h = (s?: string): string => {
+      if (!s) return ''
+      const str = String(s).trim().toLowerCase()
+      if (/^\d{2}:\d{2}$/.test(str)) return str
+      const m = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/)
+      if (!m) return ''
+      let h = parseInt(m[1], 10)
+      const min = m[2]
+      const ap = m[3]
+      if (ap) {
+        if (ap === 'pm' && h !== 12) h += 12
+        if (ap === 'am' && h === 12) h = 0
+      }
+      return `${String(h).padStart(2, '0')}:${min}`
     }
-    const diffMs = target.getTime() - now.getTime()
-    const h = Math.floor(diffMs / 3600000)
-    const m = Math.floor((diffMs % 3600000) / 60000)
-    return `${h}h ${m}m`
-  }, [])
+
+    const parseDaysToIndices = (days: any): number[] => {
+      if (!days) return []
+      try {
+        const parsed = typeof days === 'string' ? JSON.parse(days) : days
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map((d) => {
+              const name = String(d).slice(0, 3).toLowerCase()
+              return ['sun','mon','tue','wed','thu','fri','sat'].indexOf(name)
+            })
+            .filter((i) => i >= 0)
+        }
+      } catch {
+        const parts = String(days).split(',').map((s) => s.trim().slice(0,3).toLowerCase())
+        return parts.map((p) => ['sun','mon','tue','wed','thu','fri','sat'].indexOf(p)).filter((i) => i >= 0)
+      }
+      return []
+    }
+
+    const compute = async () => {
+      try {
+        if (!user) { setNextShiftIn('—'); return }
+        const username = user.email
+        const fullName = user.name
+        const now = new Date()
+        const YYYYMMDD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        const todayStr = YYYYMMDD(now)
+
+        const { data: schedules } = await supabase
+          .from('schedule')
+          .select('id, shift_name, start_date, end_date, employee_name, user_name, created_at')
+          .or(`user_name.eq.${username},employee_name.eq.${fullName}`)
+          .order('created_at', { ascending: false })
+
+        if (!schedules || schedules.length === 0) { setNextShiftIn('—'); return }
+
+        // Consider most recent active schedule first
+        const candidates = schedules as any[]
+
+        let bestDelta: number | null = null
+
+        for (const s of candidates) {
+          const startOk = !s.start_date || s.start_date <= todayStr
+          const endOk = !s.end_date || s.end_date >= todayStr
+          if (!startOk && !s.start_date) continue
+
+          // Load template
+          const { data: tmpl } = await supabase
+            .from('template')
+            .select('start_time, days')
+            .eq('shift_name', s.shift_name)
+            .maybeSingle()
+          if (!tmpl) continue
+          const weekdays = parseDaysToIndices((tmpl as any).days)
+          const start24 = to24h((tmpl as any).start_time)
+          if (!start24) continue
+          const [hh, mm] = start24.split(':').map((x) => parseInt(x, 10))
+
+          // Search next 21 days for the earliest next occurrence
+          for (let i = 0; i < 21; i++) {
+            const d = new Date(now)
+            d.setDate(d.getDate() + i)
+            const dStr = YYYYMMDD(d)
+            const within = (!s.start_date || s.start_date <= dStr) && (!s.end_date || s.end_date >= dStr)
+            if (!within) continue
+            if (weekdays.includes(d.getDay())) {
+              const target = new Date(d)
+              target.setHours(hh, mm, 0, 0)
+              if (target > now) {
+                const delta = target.getTime() - now.getTime()
+                if (bestDelta === null || delta < bestDelta) bestDelta = delta
+                break
+              }
+            }
+          }
+        }
+
+        if (bestDelta === null) { setNextShiftIn('—'); return }
+        const hours = Math.floor(bestDelta / 3600000)
+        const minutes = Math.floor((bestDelta % 3600000) / 60000)
+        setNextShiftIn(`${hours}h ${minutes}m`)
+      } catch {
+        setNextShiftIn('—')
+      }
+    }
+
+    compute()
+  }, [user])
 
   const handleLogout = () => {
+    setShowLogoutConfirm(true)
+  }
+
+  const confirmLogout = (ok: boolean) => {
+    if (!ok) { setShowLogoutConfirm(false); return }
+    setShowLogoutConfirm(false)
     logout()
     navigate('/login')
   }
@@ -60,23 +166,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const adminLinks = [
     { to: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/admin/schedules', icon: Calendar, label: 'Schedules' },
-    { to: '/admin/approvals', icon: CheckSquare, label: 'Approvals' },
     { to: '/admin/reports', icon: FileText, label: 'Reports' },
+    { to: '/admin/employees/new', icon: UserPlus, label: 'Add Employee' },
   ]
 
   const employeeLinks = [
     { to: '/employee', icon: Home, label: 'Home' },
     { to: '/employee/timesheet', icon: Clock, label: 'Timesheet' },
-    { to: '/employee/leave', icon: FileCheck, label: 'Leave' },
   ]
 
   const links = isAdmin ? adminLinks : employeeLinks
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/40 to-slate-100 dark:from-slate-900 dark:via-indigo-950/40 dark:to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-green-50/20 dark:from-gray-950 dark:via-blue-950/20 dark:to-green-950/10 transition-colors duration-500">
       {/* Header */}
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container flex h-16 items-center px-4">
+      <motion.header 
+        initial={{ y: -100 }}
+        animate={{ y: 0 }}
+        transition={{ type: "spring", stiffness: 100 }}
+        className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-xl backdrop-saturate-150 shadow-sm"
+      >
+        <div className="container flex h-16 items-center pl-0 pr-4 md:pl-0 md:pr-6 lg:pl-0 lg:pr-8">
           <div className="flex items-center gap-2">
             <button
               className="lg:hidden"
@@ -88,120 +198,244 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <Menu className="w-6 h-6" />
               )}
             </button>
-            <Link to={isAdmin ? '/admin' : '/employee'} className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                <span className="text-primary-foreground font-bold text-lg">S</span>
-              </div>
-              <span className="font-bold text-xl hidden md:inline">STAR</span>
+            <Link to={isAdmin ? '/admin' : '/employee'} className="flex items-center group">
+              <span className="font-bold text-2xl bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">STAR</span>
             </Link>
           </div>
 
-          {/* Right cluster: next shift, theme, user */}
-          <div className="ml-auto flex items-center gap-4">
+          {/* Right cluster: next shift, actions */}
+          <div className="ml-auto flex items-center gap-3 md:gap-4 lg:gap-6 xl:gap-8">
             {/* Next shift micro-summary */}
             {!isAdmin && (
-              <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground px-2 py-1 rounded-md border">
-                <Timer className="w-3.5 h-3.5" />
-                <span>Next shift in</span>
-                <span className="font-medium text-foreground">{nextShiftIn}</span>
-              </div>
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex items-center gap-2 text-[11px] sm:text-xs px-2 py-1 sm:px-3 sm:py-2 rounded-2xl bg-secondary/10 border border-secondary/20"
+              >
+                <Timer className="w-4 h-4 text-secondary" />
+                <span className="text-muted-foreground">Next shift in</span>
+                <span className="font-semibold text-secondary">{nextShiftIn}</span>
+              </motion.div>
             )}
 
+            {/* Profile (replaces Notifications) */}
+            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative rounded-xl"
+                onClick={() => navigate('/profile')}
+                title="Edit profile"
+              >
+                <User className="w-5 h-5" />
+              </Button>
+            </motion.div>
+
+            {/* Separator for large screens */}
+            <span className="hidden lg:block h-6 w-px bg-border/60" />
+
             {/* Theme toggle */}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleTheme}
-              title="Toggle theme"
-            >
-              {isDark ? (
-                <Sun className="w-5 h-5" />
-              ) : (
-                <Moon className="w-5 h-5" />
-              )}
-            </Button>
+            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                title="Toggle theme"
+                className="rounded-xl"
+              >
+                <AnimatePresence mode="wait">
+                  {isDark ? (
+                    <motion.div
+                      key="sun"
+                      initial={{ rotate: -90, opacity: 0 }}
+                      animate={{ rotate: 0, opacity: 1 }}
+                      exit={{ rotate: 90, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <Sun className="w-5 h-5 text-yellow-500" />
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="moon"
+                      initial={{ rotate: 90, opacity: 0 }}
+                      animate={{ rotate: 0, opacity: 1 }}
+                      exit={{ rotate: -90, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <Moon className="w-5 h-5 text-blue-500" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </Button>
+            </motion.div>
 
             {/* User avatar + role pill + actions */}
-            <div className="hidden md:flex items-center gap-3">
-              <div className="h-8 px-2 rounded-full border text-xs capitalize flex items-center">
+            <motion.div 
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="hidden md:flex items-center gap-3 px-3 py-2 rounded-2xl bg-muted/50 border border-border/50"
+            >
+              <div className="h-7 px-3 rounded-full bg-gradient-to-r from-primary/20 to-secondary/20 text-xs font-semibold capitalize flex items-center">
                 {user?.role}
               </div>
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-semibold">
-                {initials}
+              <div className="w-9 h-9 rounded-full overflow-hidden shadow-md">
+                {user?.avatar ? (
+                  <img src={user.avatar} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-primary to-secondary text-white flex items-center justify-center font-bold">
+                    {initials}
+                  </div>
+                )}
               </div>
               <div className="text-sm leading-tight">
-                <p className="font-medium line-clamp-1 max-w-[140px]">{user?.name}</p>
+                <p className="font-semibold line-clamp-1 max-w-[140px]">{user?.name}</p>
                 <p className="text-xs text-muted-foreground line-clamp-1">{user?.email}</p>
               </div>
-            </div>
+            </motion.div>
 
-            <Button variant="ghost" size="icon" onClick={handleLogout} title="Logout">
-              <LogOut className="w-5 h-5" />
-            </Button>
+            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                onClick={handleLogout} 
+                title="Logout"
+                className="rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-colors"
+              >
+                <LogOut className="w-5 h-5" />
+              </Button>
+            </motion.div>
           </div>
         </div>
-      </header>
+      </motion.header>
+
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[100]">
+          <div className="absolute inset-0 bg-black/40" onClick={() => confirmLogout(false)} />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-sm rounded-2xl border bg-background shadow-xl p-6">
+              <h3 className="text-lg font-semibold mb-2">Confirm Logout</h3>
+              <p className="text-sm text-muted-foreground mb-4">Are you sure you want to log out?</p>
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="outline" className="rounded-xl" onClick={() => confirmLogout(false)}>Cancel</Button>
+                <Button className="rounded-xl" onClick={() => confirmLogout(true)}>Log Out</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex">
         {/* Sidebar - Desktop */}
-        <aside className="hidden lg:block w-64 border-r min-h-[calc(100vh-4rem)] p-4">
+        <motion.aside 
+          initial={{ x: -100, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 100, delay: 0.1 }}
+          className="hidden lg:block w-72 border-r border-border/40 min-h-[calc(100vh-4rem)] p-6 bg-background/50 backdrop-blur-sm"
+        >
           <nav className="space-y-2">
-            {links.map((link) => {
+            {links.map((link, index) => {
               const Icon = link.icon
               const isActive = location.pathname === link.to
               return (
-                <Link key={link.to} to={link.to}>
-                  <div
-                    className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors ${
-                      isActive
-                        ? 'bg-primary/90 text-primary-foreground'
-                        : 'hover:bg-muted'
-                    }`}
-                  >
-                    <Icon className="w-5 h-5" />
-                    <span className="font-medium">{link.label}</span>
-                  </div>
-                </Link>
+                <motion.div
+                  key={link.to}
+                  initial={{ x: -20, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  transition={{ delay: index * 0.1 }}
+                >
+                  <Link to={link.to}>
+                    <motion.div
+                      whileHover={{ x: 5 }}
+                      whileTap={{ scale: 0.98 }}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 ${
+                        isActive
+                          ? 'bg-gradient-to-r from-primary to-primary/80 text-white shadow-lg shadow-primary/25'
+                          : 'hover:bg-muted/50 hover:shadow-md'
+                      }`}
+                    >
+                      <Icon className={`w-5 h-5 ${isActive ? 'text-white' : ''}`} />
+                      <span className="font-medium">{link.label}</span>
+                      {isActive && (
+                        <motion.div
+                          layoutId="activeTab"
+                          className="ml-auto"
+                          transition={{ type: "spring", stiffness: 300 }}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  </Link>
+                </motion.div>
               )
             })}
           </nav>
-        </aside>
+        </motion.aside>
 
         {/* Mobile Menu */}
-        {isMobileMenuOpen && (
-          <div className="lg:hidden fixed inset-0 z-40 bg-background/80 backdrop-blur-sm">
-            <aside className="fixed left-0 top-16 bottom-0 w-64 border-r bg-background p-4">
-              <nav className="space-y-2">
-                {links.map((link) => {
-                  const Icon = link.icon
-                  const isActive = location.pathname === link.to
-                  return (
-                    <Link
-                      key={link.to}
-                      to={link.to}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                    >
-                      <div
-                        className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors ${
-                          isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'hover:bg-muted'
-                        }`}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="lg:hidden fixed inset-0 z-40 bg-background/80 backdrop-blur-md"
+              onClick={() => setIsMobileMenuOpen(false)}
+            >
+              <motion.aside
+                initial={{ x: -300 }}
+                animate={{ x: 0 }}
+                exit={{ x: -300 }}
+                transition={{ type: "spring", stiffness: 100 }}
+                className="fixed left-0 top-16 bottom-0 w-72 border-r border-border/40 bg-background/95 backdrop-blur-xl p-6 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <nav className="space-y-2">
+                  {links.map((link, index) => {
+                    const Icon = link.icon
+                    const isActive = location.pathname === link.to
+                    return (
+                      <motion.div
+                        key={link.to}
+                        initial={{ x: -20, opacity: 0 }}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ delay: index * 0.1 }}
                       >
-                        <Icon className="w-5 h-5" />
-                        <span className="font-medium">{link.label}</span>
-                      </div>
-                    </Link>
-                  )
-                })}
-              </nav>
-            </aside>
-          </div>
-        )}
+                        <Link
+                          to={link.to}
+                          onClick={() => setIsMobileMenuOpen(false)}
+                        >
+                          <motion.div
+                            whileTap={{ scale: 0.98 }}
+                            className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 ${
+                              isActive
+                                ? 'bg-gradient-to-r from-primary to-primary/80 text-white shadow-lg'
+                                : 'hover:bg-muted/50'
+                            }`}
+                          >
+                            <Icon className={`w-5 h-5 ${isActive ? 'text-white' : ''}`} />
+                            <span className="font-medium">{link.label}</span>
+                          </motion.div>
+                        </Link>
+                      </motion.div>
+                    )
+                  })}
+                </nav>
+              </motion.aside>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Main Content */}
-        <main className="flex-1 p-4 lg:p-8">
-          <div className="max-w-7xl mx-auto">{children}</div>
+        <main className="flex-1 p-4 md:p-6 lg:p-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="max-w-7xl mx-auto"
+          >
+            {children}
+          </motion.div>
         </main>
       </div>
     </div>

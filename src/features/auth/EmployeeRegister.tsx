@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Toast, ToastContainer } from '@/components/ui/toast'
 import { supabase } from '@/lib/supabase'
 import { 
@@ -30,7 +29,7 @@ function useRegister() {
   })
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [acceptedTerms, setAcceptedTerms] = useState(false)
+  // Terms removed: registration proceeds when fields are valid
 
   const validateUsername = (username: string): boolean => {
     return username.trim().length >= 3
@@ -70,9 +69,7 @@ function useRegister() {
       newErrors.confirmPassword = 'Passwords do not match'
     }
 
-    if (!acceptedTerms) {
-      newErrors.terms = 'You must accept the terms and conditions'
-    }
+    // Terms removed
 
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -103,7 +100,7 @@ function useRegister() {
         return { success: false, username: formData.username }
       }
 
-      const res = await fetch('https://southlandroofing.app.n8n.cloud/webhook/registration', {
+      const res = await fetch('https://primary-production-6722.up.railway.app/webhook/registration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -111,7 +108,6 @@ function useRegister() {
           username: formData.username,
           phone: formData.phone,
           password: formData.password,
-          acceptedTerms,
           createdAt: new Date().toISOString()
         })
       })
@@ -145,8 +141,6 @@ function useRegister() {
     updateField,
     loading,
     errors,
-    acceptedTerms,
-    setAcceptedTerms,
     register,
     isValid: validateForm,
   }
@@ -164,8 +158,6 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
     updateField,
     loading,
     errors,
-    acceptedTerms,
-    setAcceptedTerms,
     register,
   } = useRegister()
 
@@ -241,9 +233,9 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
   }, [toast])
 
   return (
-    <div className="min-h-screen w-full relative overflow-hidden bg-gradient-to-br from-blue-50 via-indigo-50 to-blue-100 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900">
+    <div className="min-h-screen w-full relative overflow-hidden bg-gradient-to-br from-muted/50 via-secondary/20 to-primary/10 dark:from-background dark:via-muted/20 dark:to-background">
       {/* Animated background pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-blue-100/50 via-transparent to-transparent dark:from-indigo-900/20" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-secondary/30 via-transparent to-transparent dark:from-primary/20" />
       
       {/* Toast notifications */}
       <AnimatePresence>
@@ -272,36 +264,39 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="w-full max-w-[480px]"
+          className="w-full max-w-[480px] md:max-w-5xl"
         >
-          {/* Glassmorphic card */}
-          <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-blue-500/10 dark:shadow-indigo-500/10 p-8">
-            {/* Brand icon with glow effect */}
-            <motion.div 
-              className="flex justify-center mb-6"
-              whileHover={{ scale: 1.05 }}
-              transition={{ type: "spring", stiffness: 400, damping: 10 }}
-            >
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-600 rounded-full blur-md opacity-50 group-hover:opacity-75 transition-opacity" />
-                <div className="relative w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-lg">
-                  <UserPlus className="w-8 h-8 text-white" strokeWidth={2.5} />
+          {/* Glassmorphic card with md+ two-column layout */}
+          <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-primary/20 p-0 overflow-hidden">
+            <div className="grid md:grid-cols-2">
+              {/* Left: form content */}
+              <div className="p-8">
+                {/* Brand icon with glow effect */}
+                <motion.div 
+                  className="flex justify-center md:justify-start mb-6"
+                  whileHover={{ scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 10 }}
+                >
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-primary rounded-full blur-md opacity-50 group-hover:opacity-75 transition-opacity" />
+                    <div className="relative w-16 h-16 bg-primary rounded-full flex items-center justify-center shadow-lg">
+                      <UserPlus className="w-8 h-8 text-white" strokeWidth={2.5} />
+                    </div>
+                  </div>
+                </motion.div>
+
+                {/* Title */}
+                <div className="text-center md:text-left mb-8">
+                  <h1 className="hidden md:block text-3xl font-extrabold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+                    Add New Employee
+                  </h1>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    Create your employee account
+                  </p>
                 </div>
-              </div>
-            </motion.div>
 
-            {/* Title */}
-            <div className="text-center mb-8">
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                Join STAR
-              </h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Create your employee account
-              </p>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-4">
+                {/* Form */}
+                <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
               {/* Full Name */}
               <div className="space-y-2">
                 <label htmlFor="fullName" className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -322,11 +317,15 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                       value={formData.fullName}
                       onChange={(e) => updateField('fullName', e.target.value)}
                       className={cn(
-                        "pl-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         errors.fullName && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
                       aria-invalid={!!errors.fullName}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                     />
                   </motion.div>
@@ -364,11 +363,15 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                       value={formData.username}
                       onChange={(e) => updateField('username', e.target.value)}
                       className={cn(
-                        "pl-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         errors.username && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
                       aria-invalid={!!errors.username}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                     />
                   </motion.div>
@@ -404,11 +407,15 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                       value={formData.phone}
                       onChange={(e) => updateField('phone', e.target.value)}
                       className={cn(
-                        "pl-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         errors.phone && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
                       aria-invalid={!!errors.phone}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                     />
                   </motion.div>
@@ -444,11 +451,15 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                       value={formData.password}
                       onChange={(e) => updateField('password', e.target.value)}
                       className={cn(
-                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         errors.password && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
                       aria-invalid={!!errors.password}
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                     />
                   </motion.div>
@@ -491,11 +502,15 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                       value={formData.confirmPassword}
                       onChange={(e) => updateField('confirmPassword', e.target.value)}
                       className={cn(
-                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all",
+                        "pl-10 pr-10 h-11 bg-white dark:bg-slate-800 border-border focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
                         errors.confirmPassword && "border-red-500 focus:ring-red-500"
                       )}
                       disabled={loading}
                       aria-invalid={!!errors.confirmPassword}
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                     />
                   </motion.div>
@@ -517,47 +532,19 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                   </motion.p>
                 )}
               </div>
-
-              {/* Terms and Conditions */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="terms"
-                    checked={acceptedTerms}
-                    onChange={(e) => setAcceptedTerms(e.target.checked)}
-                  />
-                  <label htmlFor="terms" className="text-sm cursor-pointer">
-                    I agree to the{' '}
-                    <a href="#" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
-                      Terms and Conditions
-                    </a>
-                  </label>
-                </div>
-                {errors.terms && (
-                  <motion.p
-                    initial={{ opacity: 0, y: -5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="text-xs text-red-600 dark:text-red-400"
-                  >
-                    {errors.terms}
-                  </motion.p>
-                )}
-              </div>
-
               {/* Register button */}
               <motion.div whileTap={{ scale: 0.98 }}>
                 <Button
                   type="submit"
                   disabled={
                     loading ||
-                    !acceptedTerms ||
                     !formData.fullName ||
                     !formData.username ||
                     !formData.phone ||
                     !formData.password ||
                     !formData.confirmPassword
                   }
-                  className="w-full h-11 text-sm font-medium bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  className="w-full h-11 text-sm font-medium bg-primary hover:bg-primary/90 focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
                   {loading ? (
                     <>
@@ -572,20 +559,22 @@ export default function EmployeeRegister({ onRegister }: EmployeeRegisterProps) 
                   )}
                 </Button>
               </motion.div>
+                </form>
+              </div>
 
-              {/* Demo mode helper */}
-              <p className="text-xs text-center text-gray-500 dark:text-gray-400">
-                Demo mode: Fill all fields to continue
-              </p>
-
-              {/* Login link */}
-              <p className="text-sm text-center text-muted-foreground">
-                Already have an account?{' '}
-                <Link to="/login" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium">
-                  Sign in
-                </Link>
-              </p>
-            </form>
+              {/* Right: showcase panel (desktop only) */}
+              <div className="hidden md:block p-10 bg-gradient-to-br from-secondary/20 via-primary/10 to-background">
+                <div className="max-w-md ml-auto">
+                  <h2 className="text-2xl font-bold text-foreground/90 mb-4">Why managed accounts?</h2>
+                  <ul className="space-y-3 text-sm text-muted-foreground">
+                    <li className="flex items-start gap-2"><span className="mt-1 w-2 h-2 rounded-full bg-primary" /> Consistent data for HR and payroll</li>
+                    <li className="flex items-start gap-2"><span className="mt-1 w-2 h-2 rounded-full bg-primary" /> Verified identities and access control</li>
+                    <li className="flex items-start gap-2"><span className="mt-1 w-2 h-2 rounded-full bg-primary" /> Faster onboarding with templates</li>
+                    <li className="flex items-start gap-2"><span className="mt-1 w-2 h-2 rounded-full bg-primary" /> Secure by design, audit-friendly</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
           </div>
         </motion.div>
       </div>

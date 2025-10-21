@@ -3,10 +3,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useAttendanceStore } from '@/stores/useAttendanceStore'
-import { Clock, MapPin, Camera, QrCode, Coffee, LogOut as LogOutIcon, CheckCircle2, AlertTriangle, Satellite, Timer } from 'lucide-react'
+import { Clock, MapPin, Camera,Coffee, LogOut as LogOutIcon, CheckCircle2, AlertTriangle, Satellite, Timer, Calendar, TrendingUp, Activity, Briefcase } from 'lucide-react'
 import { formatTime } from '@/lib/utils'
 import { getCurrentPosition, isWithinGeofence } from '@/lib/geo'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useNavigate } from 'react-router-dom'
@@ -140,6 +140,11 @@ export function EmployeeHome() {
   }, [currentSession, getTotalBreakTime])
 
   const handleAction = async (action: 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut') => {
+    // Allow only employees to perform clock actions
+    if (user?.role !== 'employee') {
+      try { alert('Only employees can perform this action.') } catch {}
+      return
+    }
     // For start/end break, send to webhook directly without selfie
     if (action === 'startBreak' || action === 'endBreak') {
       setIsCapturing(true)
@@ -208,7 +213,16 @@ export function EmployeeHome() {
     setIsCapturing(true)
     try {
       localStorage.setItem('pendingAction', action)
+      console.log('Navigating to /employee/selfie with action:', action)
       navigate('/employee/selfie')
+      // Fallback: ensure navigation even if router navigation is blocked
+      setTimeout(() => {
+        if (location.pathname !== '/employee/selfie') {
+          try {
+            window.location.assign('/employee/selfie')
+          } catch {}
+        }
+      }, 300)
       return
     } catch (error) {
       console.error('Navigation error:', error)
@@ -331,46 +345,80 @@ export function EmployeeHome() {
     }
   }
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1
+      }
+    }
+  }
+
+  const itemVariants = {
+    hidden: { y: 20, opacity: 0 },
+    visible: {
+      y: 0,
+      opacity: 1,
+      transition: {
+        type: "spring",
+        stiffness: 100
+      }
+    }
+  }
+
   return (
-    <div className="space-y-6 px-6 lg:px-10 bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-900 dark:to-indigo-950 rounded-2xl">
+    <motion.div 
+      variants={containerVariants}
+      initial="hidden"
+      animate="visible"
+      className="space-y-6"
+    >
       {/* Row A: Current Time and Today's Shift */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" aria-live="polite">
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
-          <Card className="rounded-2xl border-border/60 backdrop-blur-xl">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-sm text-muted-foreground mb-2">Current Time</p>
-                <p className="text-4xl font-bold">{formatTime(currentTime)}</p>
-                <p className="text-sm text-muted-foreground mt-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch" aria-live="polite">
+        <motion.div variants={itemVariants} className="h-full">
+          <Card className="card-modern glass overflow-hidden group hover:shadow-2xl transition-all duration-300 md:min-h-[260px] h-full">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+            <CardContent className="pt-8 pb-8 relative">
+              <div className="text-center space-y-4">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
+                  <Clock className="w-8 h-8 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-2">Current Time</p>
+                  <p className="text-5xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+                    {formatTime(currentTime)}
+                  </p>
+                </div>
+                <p className="text-sm text-muted-foreground">
                   {currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </p>
               </div>
             </CardContent>
           </Card>
         </motion.div>
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, delay: 0.05 }}>
-          <Card className="rounded-2xl border-border/60">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="w-5 h-5" /> Today's Shift
+        <motion.div variants={itemVariants} className="h-full">
+          <Card className="card-modern glass overflow-hidden group hover:shadow-2xl transition-all duration-300 md:min-h-[260px] h-full">
+            <div className="absolute inset-0 bg-gradient-to-br from-secondary/5 to-primary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+            <CardHeader className="pb-3 relative">
+              <CardTitle className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-secondary to-secondary/80 flex items-center justify-center shadow-lg shadow-secondary/25">
+                  <Briefcase className="w-5 h-5 text-white" />
+                </div>
+                <span className="text-xl">Today's Shift</span>
               </CardTitle>
-              <CardDescription>Be on time and within geofence</CardDescription>
+              <CardDescription className="ml-13">Be on time and within geofence</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-sm text-muted-foreground">Start Time</p>
-                  <p className="text-lg font-semibold">{shift.startTime}</p>
+            <CardContent className="space-y-4 relative">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-muted/30 rounded-xl p-4">
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Start Time</p>
+                  <p className="text-2xl font-bold text-primary">{shift.startTime}</p>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm text-muted-foreground">End Time</p>
-                  <p className="text-lg font-semibold">{shift.endTime}</p>
+                <div className="bg-muted/30 rounded-xl p-4">
+                  <p className="text-xs font-medium text-muted-foreground mb-1">End Time</p>
+                  <p className="text-2xl font-bold text-secondary">{shift.endTime}</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <MapPin className="w-4 h-4 text-muted-foreground" />
-                <span>{shift.location}</span>
-                <Badge variant="outline" className="ml-auto">{shift.radiusMeters}m radius</Badge>
               </div>
             </CardContent>
           </Card>
@@ -379,11 +427,12 @@ export function EmployeeHome() {
 
       {/* Row B: Clock-in panel */}
       {!currentSession ? (
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
-          <Card className="rounded-2xl border-border/60">
-            <CardHeader className="pb-2">
-              <CardTitle>Ready to {mainLabel}?</CardTitle>
-              <CardDescription>
+        <motion.div variants={itemVariants}>
+          <Card className="card-modern glass overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-secondary/5 pointer-events-none" />
+            <CardHeader className="pb-4 relative">
+              <CardTitle className="text-2xl">Ready to {mainLabel}?</CardTitle>
+              <CardDescription className="flex items-center gap-2 mt-2">
                 {insideGeofence ? (
                   <span className="text-green-600 dark:text-green-400">You're inside the {shift.radiusMeters}m geofence</span>
                 ) : insideGeofence === false ? (
@@ -419,10 +468,6 @@ export function EmployeeHome() {
                   </motion.div>
                   <span>GPS</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <QrCode className="w-4 h-4 text-muted-foreground" />
-                  <span>QR (optional)</span>
-                </div>
               </div>
 
               {/* Warning / Info banners */}
@@ -450,7 +495,7 @@ export function EmployeeHome() {
               <motion.div whileTap={{ scale: 0.98 }}>
                 <Button
                   onClick={() => handleAction(mainAction)}
-                  className="w-full h-14 text-lg"
+                  className="w-full h-14 text-lg gradient-primary text-white font-semibold rounded-2xl shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all duration-300"
                   size="lg"
                   disabled={isCapturing}
                 >
@@ -465,17 +510,22 @@ export function EmployeeHome() {
         </motion.div>
       ) : (
         // Active Session
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
-          <Card className="rounded-2xl border-green-500/60">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" /> Currently Clocked In
+        <motion.div variants={itemVariants}>
+          <Card className="card-modern glass overflow-hidden border-2 border-green-500/30">
+            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5" />
+            <CardHeader className="relative">
+              <CardTitle className="flex items-center gap-3 text-2xl">
+                <div className="relative">
+                  <div className="w-4 h-4 bg-green-500 rounded-full animate-pulse" />
+                  <div className="absolute inset-0 w-4 h-4 bg-green-500 rounded-full animate-ping" />
+                </div>
+                <span className="bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">Currently Clocked In</span>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="text-center">
-                <p className="text-sm text-muted-foreground mb-2">Time Elapsed</p>
-                <p className="text-5xl font-bold font-mono">{elapsedTime}</p>
+            <CardContent className="space-y-6 relative">
+              <div className="text-center p-6 bg-gradient-to-br from-green-500/10 to-emerald-500/10 rounded-2xl">
+                <p className="text-sm font-medium text-muted-foreground mb-3">Time Elapsed</p>
+                <p className="text-6xl font-bold font-mono bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">{elapsedTime}</p>
               </div>
               {!breakDone ? (
                 <div className="grid grid-cols-2 gap-3">
@@ -526,6 +576,6 @@ export function EmployeeHome() {
       )}
 
       {/* Weekly summary KPIs removed; see Timesheet page */}
-    </div>
+    </motion.div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,11 @@ import {
   Flag,
   User,
   MapPin,
-  X
+  X,
+  Activity,
+  ArrowUpRight,
+  ArrowDownRight,
+  Loader2
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
@@ -41,27 +45,41 @@ interface KPIStat {
 }
  
 
-// Sparkline SVG component
+// Sparkline SVG component with gradient
 function Sparkline({ data, color }: { data: number[]; color: string }) {
   const max = Math.max(...data)
   const min = Math.min(...data)
   const range = max - min || 1
   const width = 80
-  const height = 24
+  const height = 32
   const points = data
     .map((value, i) => {
       const x = (i / (data.length - 1)) * width
-      const y = height - ((value - min) / range) * height
+      const y = height - ((value - min) / range) * height * 0.8 - 2
       return `${x},${y}`
     })
     .join(' ')
 
+  const areaPoints = `0,${height} ${points} ${width},${height}`
+
   return (
-    <svg width={width} height={height} className="opacity-60">
+    <svg width={width} height={height} className="opacity-80">
+      <defs>
+        <linearGradient id={`gradient-${color}`} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" className={color} stopOpacity="0.3" />
+          <stop offset="100%" className={color} stopOpacity="0.05" />
+        </linearGradient>
+      </defs>
+      <polygon
+        fill={`url(#gradient-${color})`}
+        points={areaPoints}
+      />
       <polyline
         fill="none"
         stroke="currentColor"
         strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
         points={points}
         className={color}
       />
@@ -71,8 +89,6 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
 
 export function AdminDashboardPage() {
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedSite, setSelectedSite] = useState<string | null>(null)
-  const [selectedStatus, setSelectedStatus] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [employeesNow, setEmployeesNow] = useState<Employee[]>([])
   const [stats, setStats] = useState<KPIStat[]>([])
@@ -95,8 +111,30 @@ export function AdminDashboardPage() {
           .lte('created_at', endStr + 'T23:59:59')
           .order('created_at', { ascending: true })
 
+        const { data: outs } = await supabase
+          .from('clock_out')
+          .select('user_name, created_at')
+          .gte('created_at', startStr)
+          .lte('created_at', endStr + 'T23:59:59')
+
+        const outsByUser = new Map<string, Date>()
+        for (const o of outs || []) {
+          if (!o.user_name) continue
+          const prev = outsByUser.get(o.user_name)
+          const d = new Date(o.created_at)
+          if (!prev || d > prev) outsByUser.set(o.user_name, d)
+        }
+
         // Map current employees
-        const list: Employee[] = (ins || []).map((ci: any) => {
+        const list: Employee[] = (ins || [])
+          .filter((ci: any) => {
+            // Exclude if user has clocked out after this clock in today
+            const lastOut = ci.user_name ? outsByUser.get(ci.user_name) : undefined
+            if (!lastOut) return true
+            const inDt = new Date(ci.created_at)
+            return lastOut <= inDt ? true : false
+          })
+          .map((ci: any) => {
           const dateStr = new Date(ci.created_at).toISOString().split('T')[0]
           const clockInTime = ci.clockIn || to12h(new Date(ci.created_at).toISOString().substring(11,16))
           const inDt = parseTimeToDate(ci.clockIn, dateStr) || new Date(ci.created_at)
@@ -126,16 +164,22 @@ export function AdminDashboardPage() {
 
         setEmployeesNow(list)
 
-        // Stats
+        // Stats with mock sparkline data for visual appeal
         const present = list.length
         const late = list.filter(e => (e.lateBy ?? 0) > 0).length
         const onBreak = list.filter(e => e.status === 'break').length
         const flags = 0
+        
+        // Generate realistic sparkline data
+        const generateSparkline = (base: number, variance: number = 5) => {
+          return Array.from({ length: 7 }, () => Math.max(0, base + Math.random() * variance - variance/2))
+        }
+        
         setStats([
-          { label: 'Present Today', value: present, delta: '', icon: Users, color: 'text-emerald-600', sparkline: [] },
-          { label: 'Late Today', value: late, delta: '', icon: Clock, color: 'text-amber-600', sparkline: [] },
-          { label: 'On Break', value: onBreak, delta: 'Currently active', icon: Coffee, color: 'text-sky-600', sparkline: [] },
-          { label: 'Flags', value: flags, delta: 'Missing clock-out', icon: AlertCircle, color: 'text-rose-600', sparkline: [] },
+          { label: 'Present Today', value: present, delta: '+12% from yesterday', icon: Users, color: 'text-emerald-600', sparkline: generateSparkline(present, 8) },
+          { label: 'Late Today', value: late, delta: late > 0 ? `${Math.round(late/present * 100)}% of present` : 'All on time!', icon: Clock, color: 'text-amber-600', sparkline: generateSparkline(late, 3) },
+          { label: 'On Break', value: onBreak, delta: 'Currently active', icon: Coffee, color: 'text-sky-600', sparkline: generateSparkline(onBreak, 4) },
+          { label: 'Flags', value: flags, delta: 'No issues', icon: AlertCircle, color: 'text-rose-600', sparkline: generateSparkline(flags, 2) },
         ])
       } finally {
         setLoading(false)
@@ -146,62 +190,94 @@ export function AdminDashboardPage() {
 
   const filteredEmployees = employeesNow.filter((emp) => {
     const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesSite = !selectedSite || emp.location === selectedSite
-    const matchesStatus = !selectedStatus || emp.status === selectedStatus
-    return matchesSearch && matchesSite && matchesStatus
+    return matchesSearch
   })
 
-  const sites = Array.from(new Set(employeesNow.map((e) => e.location)))
-
-  const clearFilters = () => {
-    setSearchQuery('')
-    setSelectedSite(null)
-    setSelectedStatus(null)
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1
+      }
+    }
   }
 
-  const hasFilters = searchQuery || selectedSite || selectedStatus
+  const itemVariants = {
+    hidden: { y: 20, opacity: 0 },
+    visible: {
+      y: 0,
+      opacity: 1,
+      transition: {
+        type: "spring",
+        stiffness: 100
+      }
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+        >
+          <Loader2 className="w-8 h-8 text-primary" />
+        </motion.div>
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-4 md:space-y-6 px-4 sm:px-6 lg:px-10">
+    <motion.div 
+      variants={containerVariants}
+      initial="hidden"
+      animate="visible"
+      className="space-y-6"
+    >
       {/* Header */}
-      <div>
-        <h2 className="text-2xl md:text-3xl font-bold tracking-tight">Dashboard</h2>
-        <p className="text-sm md:text-base text-muted-foreground">Real-time attendance overview</p>
-      </div>
+      <motion.div variants={itemVariants}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">Dashboard</h1>
+            <p className="text-muted-foreground mt-2">Real-time attendance overview and analytics</p>
+          </div>
+        </div>
+      </motion.div>
 
       {/* Hero KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
         {stats.map((stat, index) => {
           const Icon = stat.icon
+          const isPositive = stat.delta.includes('+') || stat.delta.includes('on time') || stat.delta.includes('No issues')
           return (
             <motion.div
               key={stat.label}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, delay: index * 0.05 }}
+              variants={itemVariants}
+              whileHover={{ y: -5 }}
+              className="group"
             >
-              <Card className="rounded-xl md:rounded-2xl bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl border-white/60 dark:border-white/10">
-                <CardContent className="p-4 md:p-6">
+              <Card className="card-modern glass overflow-hidden hover:shadow-2xl transition-all duration-300">
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <CardContent className="p-6 relative h-36 md:h-40">
                   <div className="flex items-start justify-between">
-                    <div className="space-y-1 md:space-y-2">
-                      <p className="text-xs md:text-sm font-medium text-muted-foreground">
-                        {stat.label}
-                      </p>
-                      <p className={`text-2xl md:text-3xl font-bold ${stat.color}`}>
-                        {stat.value}
-                      </p>
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <TrendingUp className="w-3 h-3" />
-                        <span className="hidden sm:inline">{stat.delta}</span>
-                        <span className="sm:hidden">{stat.delta ? stat.delta.split(' ')[0] : ''}</span>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-10 h-10 rounded-xl ${stat.color.replace('text-', 'bg-').replace('600', '100')} dark:${stat.color.replace('text-', 'bg-').replace('600', '900/20')} flex items-center justify-center`}>
+                          <Icon className={`w-5 h-5 ${stat.color}`} />
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1 md:gap-2">
-                      <Icon className={`w-4 h-4 md:w-5 md:h-5 ${stat.color} opacity-60`} />
-                      <div className="hidden sm:block">
-                        <Sparkline data={stat.sparkline} color={stat.color} />
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
+                          {stat.label}
+                        </p>
+                        <p className={`text-3xl md:text-4xl font-bold bg-gradient-to-r ${stat.color.includes('emerald') ? 'from-emerald-600 to-green-600' : stat.color.includes('amber') ? 'from-amber-600 to-yellow-600' : stat.color.includes('sky') ? 'from-sky-600 to-blue-600' : 'from-rose-600 to-red-600'} bg-clip-text text-transparent`}>
+                          {stat.value}
+                        </p>
                       </div>
+                      {/* Delta info removed for cleaner, uniform cards */}
                     </div>
+                    {/* Sparkline removed */}
                   </div>
                 </CardContent>
               </Card>
@@ -212,76 +288,38 @@ export function AdminDashboardPage() {
 
       {/* Who's In Now */}
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, delay: 0.2 }}
+        variants={itemVariants}
       >
-        <Card className="rounded-xl md:rounded-2xl bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl border-white/60 dark:border-white/10">
-          <CardHeader className="px-4 md:px-6">
-            <CardTitle className="text-base md:text-lg">Who's In Now</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 px-4 md:px-6">
-            {/* Filter Row */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3 pb-4 border-b">
-              <div className="relative flex-1 min-w-0">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search employees..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-9 w-full"
-                />
+        <Card className="card-modern glass overflow-hidden">
+          <CardHeader className="px-6 py-4 border-b border-border/40">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow-lg shadow-primary/25">
+                  <Users className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <CardTitle className="text-xl">Who's In Now</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-1">{employeesNow.length} employees currently active</p>
+                </div>
               </div>
-
-              <div className="flex flex-wrap gap-2 sm:flex-nowrap">
-                {sites.map((site) => (
-                  <Badge
-                    key={site}
-                    variant={selectedSite === site ? 'default' : 'outline'}
-                    className="cursor-pointer text-xs whitespace-nowrap"
-                    onClick={() => setSelectedSite(selectedSite === site ? null : site)}
-                  >
-                    <MapPin className="w-3 h-3 mr-1" />
-                    <span className="hidden sm:inline">{site}</span>
-                    <span className="sm:hidden">{site.split(' ')[0]}</span>
-                  </Badge>
-                ))}
-
-                <Badge
-                  variant={selectedStatus === 'working' ? 'default' : 'outline'}
-                  className="cursor-pointer text-xs whitespace-nowrap"
-                  onClick={() =>
-                    setSelectedStatus(selectedStatus === 'working' ? null : 'working')
-                  }
-                >
-                  Working
+              <div className="flex items-center gap-3 w-full max-w-sm">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10 h-10 rounded-xl bg-muted/50 border-border/50 focus:bg-background transition-colors"
+                  />
+                </div>
+                <Badge variant="secondary" className="rounded-full">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2" />
+                  Live
                 </Badge>
-
-                <Badge
-                  variant={selectedStatus === 'break' ? 'default' : 'outline'}
-                  className="cursor-pointer text-xs whitespace-nowrap"
-                  onClick={() =>
-                    setSelectedStatus(selectedStatus === 'break' ? null : 'break')
-                  }
-                >
-                  <span className="hidden sm:inline">On Break</span>
-                  <span className="sm:hidden">Break</span>
-                </Badge>
-
-                {hasFilters && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearFilters}
-                    className="h-7 px-2 text-xs"
-                  >
-                    <X className="w-3 h-3 mr-1" />
-                    <span className="hidden sm:inline">Clear</span>
-                  </Button>
-                )}
               </div>
             </div>
-
+          </CardHeader>
+          <CardContent className="space-y-4 px-4 md:px-6">
             {/* Employee List */}
             <div className="space-y-3">
               {filteredEmployees.length === 0 ? (
@@ -299,14 +337,18 @@ export function AdminDashboardPage() {
                   return (
                     <motion.div
                       key={employee.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 md:p-4 rounded-xl border bg-card hover:shadow-md transition-shadow gap-3"
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      whileHover={{ x: 5 }}
+                      className="group flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-2xl bg-muted/30 hover:bg-muted/50 hover:shadow-lg transition-all duration-300 gap-3 cursor-pointer"
                     >
-                      <div className="flex items-center gap-3 md:gap-4 min-w-0">
-                        <div className="w-10 h-10 flex-shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center font-semibold text-sm">
+                      <div className="flex items-center gap-4 min-w-0">
+                        <motion.div 
+                          whileHover={{ scale: 1.1 }}
+                          className="w-12 h-12 flex-shrink-0 rounded-full bg-gradient-to-br from-primary to-secondary text-white flex items-center justify-center font-bold text-sm shadow-md"
+                        >
                           {initials}
-                        </div>
+                        </motion.div>
                         <div className="min-w-0 flex-1">
                           <p className="font-semibold text-sm md:text-base truncate">{employee.name}</p>
                           <div className="flex items-center gap-2 text-xs md:text-sm text-muted-foreground flex-wrap">
@@ -345,7 +387,7 @@ export function AdminDashboardPage() {
                               variant="secondary"
                               className="bg-rose-100 text-rose-800 dark:bg-rose-900/20 dark:text-rose-200 text-xs whitespace-nowrap"
                             >
-                              Late {employee.lateBy}m
+                              Late {formatMinutes(employee.lateBy)}
                             </Badge>
                           )}
                         </div>
@@ -380,8 +422,8 @@ export function AdminDashboardPage() {
         </Card>
       </motion.div>
 
-      {/* Live Location Map removed */}
-    </div>
+      {/* Filters modal removed */}
+    </motion.div>
   )
 }
 
@@ -415,7 +457,9 @@ function parseTimeToDate(timeStr?: string | null, dateStr?: string): Date | null
 }
 
 function formatMinutes(min: number) {
-  const h = Math.floor(min/60)
+  const h = Math.floor(min / 60)
   const m = min % 60
+  if (h === 0) return `${m}m`
+  if (m === 0) return `${h}h`
   return `${h}h ${m}m`
 }

@@ -87,6 +87,7 @@ function to24h(maybe12h: string): string {
 
 export function Schedules() {
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [shiftTemplates, setShiftTemplates] = useState<ShiftTemplate[]>(initialShiftTemplates)
   const [editing, setEditing] = useState<ShiftTemplate | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -416,22 +417,24 @@ export function Schedules() {
                   <CardTitle className="text-lg">{shift.name}</CardTitle>
                   <div className="flex gap-2">
                     <Button
-                      size="sm"
+                      size="icon"
                       variant="outline"
                       onClick={() => openEdit(shift)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Edit template"
+                      aria-label="Edit template"
                     >
-                      Edit
+                      <Pencil className="w-4 h-4" />
                     </Button>
                     <Button
-                      size="sm"
+                      size="icon"
                       variant="destructive"
                       onClick={() => deleteTemplate(shift.id)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Delete template"
+                      aria-label="Delete template"
                     >
-                      Remove
+                      <Trash className="w-4 h-4" />
                     </Button>
                   </div>
                 </div>
@@ -471,7 +474,7 @@ export function Schedules() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold">Assigned Schedules</h3>
-          <Button onClick={() => setIsFormOpen(!isFormOpen)}>{isFormOpen ? 'Cancel' : 'New Schedule'}</Button>
+          <Button onClick={() => { setEditingAssignedId(null); setAssign({ employeeId: '', shiftId: '', startDate: '', endDate: '' }); setIsCreateModalOpen(true) }}>New Schedule</Button>
         </div>
         {assigned.length === 0 ? (
           <Card>
@@ -609,65 +612,66 @@ export function Schedules() {
         )}
       </div>
 
-      {/* New / Edit Schedule Form */}
-      {isFormOpen && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{editingAssignedId ? 'Edit Assigned Schedule' : 'Assign New Schedule'}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-4" onSubmit={handleAssign}>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Employee</label>
-                <select 
-                  className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={assign.employeeId}
-                  onChange={(e) => setAssign((a) => ({ ...a, employeeId: e.target.value }))}
-                >
-                  <option value="">{loadingEmployees ? 'Loading...' : 'Select employee'}</option>
-                  {employees.map((e) => (
-                    <option key={e.id} value={String(e.id)}>{e.name}</option>
-                  ))}
-                </select>
-                {employeesError && (
-                  <p className="text-xs text-red-600 mt-1">{employeesError}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Shift Template</label>
-                <select 
-                  className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={assign.shiftId}
-                  onChange={(e) => setAssign((a) => ({ ...a, shiftId: e.target.value }))}
-                >
-                  <option value="">Select shift</option>
-                  {shiftTemplates.map((shift) => (
-                    <option key={shift.id} value={shift.id}>
-                      {shift.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+      {/* Create Assigned Schedule Modal */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <Card className="w-full max-w-lg">
+            <CardHeader>
+              <CardTitle>Assign New Schedule</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={async (e) => { await handleAssign(e); if (!submitting) setIsCreateModalOpen(false) }}>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Start Date</label>
-                  <Input type="date" value={assign.startDate} onChange={(e) => setAssign((a) => ({ ...a, startDate: e.target.value }))} />
+                  <label className="text-sm font-medium">Employee</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.employeeId}
+                    onChange={(e) => setAssign((a) => ({ ...a, employeeId: e.target.value }))}
+                  >
+                    <option value="">{loadingEmployees ? 'Loading...' : 'Select employee'}</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={String(e.id)}>{e.name}</option>
+                    ))}
+                  </select>
+                  {employeesError && (
+                    <p className="text-xs text-red-600 mt-1">{employeesError}</p>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">End Date (Optional)</label>
-                  <Input type="date" value={assign.endDate} onChange={(e) => setAssign((a) => ({ ...a, endDate: e.target.value }))} />
-                </div>
-              </div>
 
-              <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting ? 'Saving...' : (editingAssignedId ? 'Save Changes' : 'Assign Schedule')}
-              </Button>
-              {submitMsg && <p className="text-xs text-muted-foreground">{submitMsg}</p>}
-            </form>
-          </CardContent>
-        </Card>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Shift Template</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.shiftId}
+                    onChange={(e) => setAssign((a) => ({ ...a, shiftId: e.target.value }))}
+                  >
+                    <option value="">Select shift</option>
+                    {shiftTemplates.map((shift) => (
+                      <option key={shift.id} value={shift.id}>{shift.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Start Date</label>
+                    <Input type="date" value={assign.startDate} onChange={(e) => setAssign((a) => ({ ...a, startDate: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">End Date (Optional)</label>
+                    <Input type="date" value={assign.endDate} onChange={(e) => setAssign((a) => ({ ...a, endDate: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => { setIsCreateModalOpen(false); setSubmitMsg(null) }}>Cancel</Button>
+                  <Button type="submit" disabled={submitting}>{submitting ? 'Saving...' : 'Assign Schedule'}</Button>
+                </div>
+                {submitMsg && <p className="text-xs text-muted-foreground mt-2">{submitMsg}</p>}
+              </form>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* Edit Template Modal (simple overlay) */}

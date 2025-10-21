@@ -9,6 +9,7 @@ interface User {
   role: UserRole
   orgId: string
   avatar?: string
+  phone?: string
 }
 
 interface AuthState {
@@ -16,6 +17,7 @@ interface AuthState {
   isAuthenticated: boolean
   login: (identifier: string, role: UserRole, nameOverride?: string, remember?: boolean) => void
   logout: () => void
+  updateUser: (partial: Partial<Pick<User, 'name' | 'email' | 'avatar' | 'phone'>>) => void
 }
 
 export const useAuthStore = create<AuthState>((set) => {
@@ -36,6 +38,7 @@ export const useAuthStore = create<AuthState>((set) => {
         role,
         orgId: 'org-1',
         avatar: undefined,
+        phone: undefined,
       }
 
       // Persist based on remember flag
@@ -59,6 +62,23 @@ export const useAuthStore = create<AuthState>((set) => {
         sessionStorage.removeItem('authUser')
       } catch {}
       set({ user: null, isAuthenticated: false })
+    },
+    updateUser: (partial) => {
+      set((state) => {
+        const next = state.user ? { ...state.user, ...partial } : null
+        try {
+          const key = 'authUser'
+          if (next) {
+            // Persist to the storage where it currently lives
+            if (localStorage.getItem(key)) {
+              localStorage.setItem(key, JSON.stringify(next))
+            } else {
+              sessionStorage.setItem(key, JSON.stringify(next))
+            }
+          }
+        } catch {}
+        return { user: next }
+      })
     },
   }
 })

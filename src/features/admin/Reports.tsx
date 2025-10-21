@@ -30,6 +30,13 @@ export function Reports() {
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
 
+  // Derived: filter rows by employee query for display
+  const displayedRows = useMemo(() => {
+    const q = (filters.employee || '').toLowerCase().trim()
+    if (!q) return rows
+    return rows.filter(r => (r.employee || '').toLowerCase().includes(q))
+  }, [rows, filters.employee])
+
   // Helpers
   const parseTimeToDate = (timeStr?: string | null, dateStr?: string): Date | null => {
     if (!timeStr || !dateStr) return null
@@ -244,77 +251,7 @@ export function Reports() {
         </Button>
       </div>
 
-      {/* Filters */}
-      {!loading && (
-      <Card className="rounded-xl md:rounded-2xl">
-        <CardHeader className="px-4 md:px-6">
-          <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <Filter className="w-4 h-4 md:w-5 md:h-5" />
-            Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 md:px-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="space-y-2">
-              <label className="text-xs md:text-sm font-medium">Start Date</label>
-              <Input
-                type="date"
-                value={filters.startDate}
-                onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs md:text-sm font-medium">End Date</label>
-              <Input
-                type="date"
-                value={filters.endDate}
-                onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs md:text-sm font-medium">Shift</label>
-              <select
-                className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-xs md:text-sm"
-                value={filters.department}
-                onChange={(e) =>
-                  setFilters({ ...filters, department: e.target.value })
-                }
-              >
-                <option value="">All Shifts</option>
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs md:text-sm font-medium">Employee</label>
-              <Input
-                placeholder="Search employee..."
-                value={filters.employee}
-                onChange={(e) =>
-                  setFilters({ ...filters, employee: e.target.value })
-                }
-              />
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-col sm:flex-row gap-2">
-            <Button className="w-full sm:w-auto text-xs md:text-sm" onClick={fetchReport} disabled={loading}>
-              {loading ? 'Loading…' : 'Apply Filters'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                setFilters({ startDate: '', endDate: '', department: '', employee: '' })
-              }
-              className="w-full sm:w-auto text-xs md:text-sm"
-            >
-              Clear
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      )}
+      {/* Filters card removed; Employee search moved to Attendance Report header */}
 
       {/* Loading state */}
       {loading && (
@@ -379,7 +316,17 @@ export function Reports() {
       {!loading && (
       <Card className="rounded-xl md:rounded-2xl">
         <CardHeader className="px-4 md:px-6">
-          <CardTitle className="text-base md:text-lg">Attendance Report</CardTitle>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <CardTitle className="text-base md:text-lg">Attendance Report</CardTitle>
+            <div className="grid grid-cols-1 lg:grid-cols-1 gap-2 lg:gap-3 items-end lg:items-center w-full lg:w-80">
+              <Input
+                placeholder="Search employee..."
+                value={filters.employee}
+                onChange={(e) => setFilters({ ...filters, employee: e.target.value })}
+                className="rounded-full"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="px-0 md:px-6">
           <div className="overflow-x-auto">
@@ -396,7 +343,7 @@ export function Reports() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {displayedRows.map((row) => (
                   <tr
                     key={row.id}
                     className="border-b hover:bg-muted/50 cursor-pointer"
