@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { 
   Users, 
@@ -11,15 +10,8 @@ import {
   Coffee, 
   TrendingUp, 
   Search,
-  MoreVertical,
-  MessageSquare,
-  Flag,
-  User,
+  
   MapPin,
-  X,
-  Activity,
-  ArrowUpRight,
-  ArrowDownRight,
   Loader2
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -33,6 +25,7 @@ interface Employee {
   location: string
   duration: string
   lateBy?: number
+  avatar?: string
 }
 
 interface KPIStat {
@@ -117,12 +110,22 @@ export function AdminDashboardPage() {
           .gte('created_at', startStr)
           .lte('created_at', endStr + 'T23:59:59')
 
+        // Fetch profiles to show avatars
+        const { data: usersTbl } = await supabase
+          .from('user')
+          .select('user_name, profile')
+
         const outsByUser = new Map<string, Date>()
         for (const o of outs || []) {
           if (!o.user_name) continue
           const prev = outsByUser.get(o.user_name)
           const d = new Date(o.created_at)
           if (!prev || d > prev) outsByUser.set(o.user_name, d)
+        }
+
+        const profileByUser = new Map<string, string>()
+        for (const u of usersTbl || []) {
+          if (u?.user_name && u?.profile) profileByUser.set(u.user_name, u.profile)
         }
 
         // Map current employees
@@ -145,22 +148,27 @@ export function AdminDashboardPage() {
             const b1 = parseTimeToDate(ci.startBreak, dateStr)
             if (b1) workedMin = Math.max(0, workedMin - Math.max(0, Math.floor((nowDt.getTime()-b1.getTime())/60000)))
           }
-          const duration = formatMinutes(workedMin)
-          const status: 'working'|'break' = ci.startBreak && !ci.endBreak ? 'break' : 'working'
-          // Late vs 9:00 AM baseline (simple)
-          let lateBy: number | undefined
-          const baseline = new Date(inDt); baseline.setHours(9,0,0,0)
-          if (inDt > baseline) lateBy = Math.floor((inDt.getTime()-baseline.getTime())/60000)
-          return {
-            id: String(ci.id),
-            name: ci.name || ci.user_name || 'Unknown',
-            clockIn: clockInTime,
-            status,
-            location: ci.location || '—',
-            duration,
-            lateBy,
-          }
-        })
+            const duration = formatMinutes(workedMin)
+            const status: 'working'|'break' = ci.startBreak && !ci.endBreak ? 'break' : 'working'
+            // Late vs 9:00 AM baseline (simple)
+            let lateBy: number | undefined
+            const baseline = new Date(inDt); baseline.setHours(9,0,0,0)
+            if (inDt > baseline) lateBy = Math.floor((inDt.getTime()-baseline.getTime())/60000)
+            // Choose avatar: prefer user.profile if it looks valid; else use latest clock_in image
+            const profile = ci.user_name ? profileByUser.get(ci.user_name) : undefined
+            const candidate = (typeof profile === 'string' ? profile.trim() : undefined) || (ci.image ? String(ci.image) : undefined)
+
+            return {
+              id: String(ci.id),
+              name: ci.name || ci.user_name || 'Unknown',
+              clockIn: clockInTime,
+              status,
+              location: ci.location || '—',
+              duration,
+              lateBy,
+              avatar: isLikelyValidImageSrc(candidate) ? candidate : undefined,
+            }
+          })
 
         setEmployeesNow(list)
 
@@ -345,9 +353,13 @@ export function AdminDashboardPage() {
                       <div className="flex items-center gap-4 min-w-0">
                         <motion.div 
                           whileHover={{ scale: 1.1 }}
-                          className="w-12 h-12 flex-shrink-0 rounded-full bg-gradient-to-br from-primary to-secondary text-white flex items-center justify-center font-bold text-sm shadow-md"
+                          className="w-12 h-12 flex-shrink-0 rounded-full overflow-hidden bg-gradient-to-br from-primary to-secondary text-white flex items-center justify-center font-bold text-sm shadow-md"
                         >
-                          {initials}
+                          {employee.avatar ? (
+                            <img src={employee.avatar} alt={employee.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{initials}</span>
+                          )}
                         </motion.div>
                         <div className="min-w-0 flex-1">
                           <p className="font-semibold text-sm md:text-base truncate">{employee.name}</p>
@@ -391,27 +403,7 @@ export function AdminDashboardPage() {
                             </Badge>
                           )}
                         </div>
-
-                        {/* Quick Actions Dropdown */}
-                        <div className="relative group flex-shrink-0">
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreVertical className="w-4 h-4" />
-                          </Button>
-                          <div className="absolute right-0 top-full mt-1 w-40 bg-popover border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted rounded-t-lg">
-                              <User className="w-4 h-4" />
-                              View Profile
-                            </button>
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted">
-                              <MessageSquare className="w-4 h-4" />
-                              Message
-                            </button>
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted rounded-b-lg text-rose-600">
-                              <Flag className="w-4 h-4" />
-                              Flag
-                            </button>
-                          </div>
-                        </div>
+                        {/* Quick actions removed per request */}
                       </div>
                     </motion.div>
                   )
@@ -462,4 +454,13 @@ function formatMinutes(min: number) {
   if (h === 0) return `${m}m`
   if (m === 0) return `${h}h`
   return `${h}h ${m}m`
+}
+
+function isLikelyValidImageSrc(src?: string) {
+  if (!src) return false
+  const s = src.trim()
+  if (/^https?:\/\//i.test(s)) return true
+  // Require a minimum length for data URLs to avoid tiny/truncated blobs that render as black
+  if (/^data:image\/(png|jpe?g|webp);base64,/i.test(s)) return s.length > 200
+  return false
 }

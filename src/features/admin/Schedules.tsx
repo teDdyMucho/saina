@@ -14,6 +14,7 @@ type ShiftTemplate = {
   breakStart: string
   breakEnd: string
   weekdays: number[]
+  projectName?: string
 }
 
 // Parse the `days` column (could be a JSON array of names or comma-separated string)
@@ -85,6 +86,14 @@ function to24h(maybe12h: string): string {
   return `${hh}:${min}`
 }
 
+// Helper: format YYYY-MM-DD to YYYY/MM/DD
+function ymdToSlash(s?: string | null): string | null {
+  if (!s) return null
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return String(s)
+  return `${m[1]}/${m[2]}/${m[3]}`
+}
+
 export function Schedules() {
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
@@ -94,6 +103,7 @@ export function Schedules() {
   const [form, setForm] = useState({
     id: '',
     name: '',
+    projectName: '',
     startTime: '',
     endTime: '',
     breakStart: '',
@@ -102,6 +112,7 @@ export function Schedules() {
   })
   const [assign, setAssign] = useState({
     employeeId: '',
+    projectName: '',
     shiftId: '',
     startDate: '',
     endDate: '',
@@ -201,6 +212,7 @@ export function Schedules() {
     const shift = shiftTemplates.find((t) => t.name === s.shiftName)
     setAssign({
       employeeId: emp ? String(emp.id) : '',
+      projectName: shift?.projectName || '',
       shiftId: shift ? shift.id : '',
       startDate: s.startDate || '',
       endDate: s.endDate || '',
@@ -227,7 +239,7 @@ export function Schedules() {
     const loadTemplates = async () => {
       const { data, error } = await supabase
         .from('template')
-        .select('id, shift_name, start_time, end_time, break_time, days, created_at')
+        .select('id, shift_name, start_time, end_time, break_time, days, project, created_at')
 
       if (!error && data) {
         const mapped = data.map((row: any) => {
@@ -242,6 +254,7 @@ export function Schedules() {
             breakStart: brk.start,
             breakEnd: brk.end,
             weekdays,
+            projectName: (row as any).project || '',
           }
         })
         setShiftTemplates(mapped)
@@ -261,6 +274,7 @@ export function Schedules() {
     setForm({
       id: tmpl.id,
       name: tmpl.name,
+      projectName: tmpl.projectName || '',
       startTime: tmpl.startTime,
       endTime: tmpl.endTime,
       breakStart: tmpl.breakStart,
@@ -280,10 +294,12 @@ export function Schedules() {
       breakStart: '12:00',
       breakEnd: '13:00',
       weekdays: [1,2,3,4,5],
+      projectName: '',
     })
     setForm({
       id: newId,
       name: 'New Shift',
+      projectName: '',
       startTime: '09:00',
       endTime: '18:00',
       breakStart: '12:00',
@@ -292,8 +308,62 @@ export function Schedules() {
     })
   }
 
-  const deleteTemplate = (id: string) => {
+  const deleteTemplate = async (id: string) => {
+    const prev = shiftTemplates
+    const tmpl = prev.find((s) => s.id === id)
+    // Optimistic UI
     setShiftTemplates((list) => list.filter((s) => s.id !== id))
+    try {
+      // Delete from Supabase
+      await supabase.from('template').delete().eq('id', id)
+      // Notify webhook
+      try {
+        const payload = {
+          id,
+          name: tmpl?.name || null,
+          projectName: tmpl?.projectName || '',
+          startTime: tmpl ? to12h(tmpl.startTime) : null,
+          endTime: tmpl ? to12h(tmpl.endTime) : null,
+          breakTime: tmpl ? `${to12h(tmpl.breakStart)} - ${to12h(tmpl.breakEnd)}` : null,
+          weekdays: tmpl ? tmpl.weekdays.map((i) => weekdayNames[i]) : [],
+          action: 'delete' as const,
+          createdAt: new Date().toISOString(),
+        }
+        await fetch('https://primary-production-6722.up.railway.app/webhook/template', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      } catch {}
+      // Hard refresh from DB to avoid ghost/empty cards
+      await (async () => {
+        const { data, error } = await supabase
+          .from('template')
+          .select('id, shift_name, start_time, end_time, break_time, days, project, created_at')
+        if (!error && data) {
+          const mapped = data.map((row: any) => {
+            const weekdays: number[] = parseDaysToIndices(row.days)
+            const brk = parseBreakTo24h(row.break_time as string)
+            return {
+              id: String(row.id),
+              name: row.shift_name as string,
+              startTime: to24h(row.start_time as string) || '',
+              endTime: to24h(row.end_time as string) || '',
+              breakStart: brk.start,
+              breakEnd: brk.end,
+              weekdays,
+              projectName: (row as any).project || '',
+            }
+          })
+          setShiftTemplates(mapped)
+        }
+      })()
+    } catch (err) {
+      // Rollback UI on error
+      setShiftTemplates(prev)
+      console.error('Failed to delete template:', err)
+      alert('Failed to delete template. Please try again.')
+    }
   }
 
   const toggleWeekday = (i: number) => {
@@ -306,23 +376,36 @@ export function Schedules() {
   const saveEdit = async (e: React.FormEvent) => {
     e.preventDefault()
     setTemplateMsg(null)
-    // Update UI state
-    setShiftTemplates((list) => {
-      const exists = list.some((s) => s.id === form.id)
-      if (exists) {
-        return list.map((s) => (s.id === form.id ? { ...s, ...form } : s))
-      }
-      return [...list, { ...form } as any]
-    })
+    // Update UI state: only optimistically update when editing existing
+    if (!isCreating) {
+      setShiftTemplates((list) => list.map((s) => (s.id === form.id ? { ...s, ...form } : s)))
+    }
     // Send to webhook
     setTemplateSubmitting(true)
     try {
+      // Persist to Supabase only for updates. Creation is handled by n8n webhook.
+      if (!isCreating) {
+        const { error } = await supabase
+          .from('template')
+          .update({
+            shift_name: form.name,
+            start_time: to12h(form.startTime),
+            end_time: to12h(form.endTime),
+            break_time: `${to12h(form.breakStart)} - ${to12h(form.breakEnd)}`,
+            days: JSON.stringify(form.weekdays.map((i) => weekdayNames[i])),
+            project: form.projectName || '',
+          })
+          .eq('id', form.id)
+        if (error) throw error
+      }
       const res = await fetch('https://primary-production-6722.up.railway.app/webhook/template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: form.id,
+          id: isCreating ? null : form.id,
+          clientId: isCreating ? form.id : undefined,
           name: form.name,
+          projectName: form.projectName || '',
           startTime: to12h(form.startTime),
           endTime: to12h(form.endTime),
           breakTime: `${to12h(form.breakStart)} - ${to12h(form.breakEnd)}`,
@@ -334,6 +417,29 @@ export function Schedules() {
       const text = await res.text().catch(() => '')
       setTemplateMsg(res.ok ? 'Template saved' : `Failed to send: ${text || res.status}`)
       if (res.ok) {
+        // After webhook creates the row (n8n), reload from DB to avoid duplicates
+        if (isCreating) {
+          const { data, error } = await supabase
+            .from('template')
+            .select('id, shift_name, start_time, end_time, break_time, days, project, created_at')
+          if (!error && data) {
+            const mapped = data.map((row: any) => {
+              const weekdays: number[] = parseDaysToIndices(row.days)
+              const brk = parseBreakTo24h(row.break_time as string)
+              return {
+                id: String(row.id),
+                name: row.shift_name as string,
+                startTime: to24h(row.start_time as string) || '',
+                endTime: to24h(row.end_time as string) || '',
+                breakStart: brk.start,
+                breakEnd: brk.end,
+                weekdays,
+                projectName: (row as any).project || '',
+              }
+            })
+            setShiftTemplates(mapped)
+          }
+        }
         setEditing(null)
         setIsCreating(false)
       }
@@ -347,8 +453,8 @@ export function Schedules() {
   const handleAssign = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitMsg(null)
-    if (!assign.employeeId || !assign.shiftId || !assign.startDate) {
-      setSubmitMsg('Please select employee, shift, and start date')
+    if (!assign.employeeId || !assign.projectName || !assign.shiftId || !assign.startDate) {
+      setSubmitMsg('Please select employee, project, shift, and start date')
       return
     }
     const shift = shiftTemplates.find((s) => s.id === assign.shiftId)
@@ -356,33 +462,43 @@ export function Schedules() {
     setSubmitting(true)
     try {
       if (editingAssignedId) {
-        // Update existing schedule in Supabase
-        const { error } = await supabase
-          .from('schedule')
-          .update({
-            shift_name: shift?.name || null,
-            start_date: assign.startDate,
-            end_date: assign.endDate || null,
-          })
-          .eq('id', editingAssignedId)
-        if (error) throw error
-        setSubmitMsg('Schedule updated')
+        // Edits are handled by n8n; do not update DB here. Continue to send webhook below.
       } else {
-        // Create new schedule in Supabase
-        const { error } = await supabase
-          .from('schedule')
-          .insert({
-            employee_name: emp?.name || null,
-            user_name: emp?.user_name || null,
-            shift_name: shift?.name || null,
-            start_date: assign.startDate,
-            end_date: assign.endDate || null,
-          })
-        if (error) throw error
-        setSubmitMsg('Schedule assigned')
+        // Creation is handled by n8n via webhook; do not insert into Supabase here
       }
-      await loadSchedules()
-      setAssign({ employeeId: '', shiftId: '', startDate: '', endDate: '' })
+      // Send to schedule webhook
+      try {
+        const payload = {
+          id: editingAssignedId ?? null,
+          action: editingAssignedId ? 'update' as const : 'create' as const,
+          employeeName: emp?.name || null,
+          user_name: emp?.user_name || null,
+          projectName: assign.projectName || '',
+          shiftName: shift?.name || null,
+          startDate: ymdToSlash(assign.startDate),
+          endDate: ymdToSlash(assign.endDate) || null,
+          details: shift
+            ? {
+                startTime: to12h(shift.startTime),
+                endTime: to12h(shift.endTime),
+                breakTime: `${to12h(shift.breakStart)} - ${to12h(shift.breakEnd)}`,
+                weekdays: shift.weekdays.map((i) => weekdayNames[i]),
+              }
+            : null,
+          createdAt: new Date().toISOString(),
+        }
+        await fetch('https://primary-production-6722.up.railway.app/webhook/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      } catch {}
+      if (!editingAssignedId) {
+        setSubmitMsg('Schedule assigned')
+        await loadSchedules()
+      }
+      // For edits, just close—n8n will handle persistence and any UI refresh can be manual
+      setAssign({ employeeId: '', projectName: '', shiftId: '', startDate: '', endDate: '' })
       setEditingAssignedId(null)
       setIsFormOpen(false)
     } catch (err: any) {
@@ -392,6 +508,9 @@ export function Schedules() {
       setSubmitting(false)
     }
   }
+
+  // Distinct list of projects from templates
+  const projectOptions = Array.from(new Set(shiftTemplates.map((t) => t.projectName || '').filter(Boolean)))
 
   return (
     <div className="space-y-6">
@@ -414,7 +533,16 @@ export function Schedules() {
             <Card key={shift.id} className="group">
               <CardHeader>
                 <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-lg">{shift.name}</CardTitle>
+                  <div>
+                    {shift.projectName ? (
+                      <>
+                        <CardTitle className="text-lg">{shift.projectName}</CardTitle>
+                        <div className="text-sm text-muted-foreground mt-0.5">{shift.name}</div>
+                      </>
+                    ) : (
+                      <CardTitle className="text-lg">{shift.name}</CardTitle>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <Button
                       size="icon"
@@ -474,7 +602,7 @@ export function Schedules() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold">Assigned Schedules</h3>
-          <Button onClick={() => { setEditingAssignedId(null); setAssign({ employeeId: '', shiftId: '', startDate: '', endDate: '' }); setIsCreateModalOpen(true) }}>New Schedule</Button>
+          <Button onClick={() => { setEditingAssignedId(null); setAssign({ employeeId: '', projectName: '', shiftId: '', startDate: '', endDate: '' }); setIsCreateModalOpen(true) }}>New Schedule</Button>
         </div>
         {assigned.length === 0 ? (
           <Card>
@@ -509,7 +637,7 @@ export function Schedules() {
                       <span>•</span>
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
-                        <span>From {new Date(s.startDate).toLocaleDateString()}</span>
+                        <span>From {ymdToSlash(s.startDate)}</span>
                       </div>
                     </div>
                     {s.details && (
@@ -551,6 +679,20 @@ export function Schedules() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">Project</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.projectName}
+                    onChange={(e) => setAssign((a) => ({ ...a, projectName: e.target.value, shiftId: '' }))}
+                  >
+                    <option value="">Select project</option>
+                    {projectOptions.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Shift Template</label>
                   <select 
                     className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -558,9 +700,11 @@ export function Schedules() {
                     onChange={(e) => setAssign((a) => ({ ...a, shiftId: e.target.value }))}
                   >
                     <option value="">Select shift</option>
-                    {shiftTemplates.map((shift) => (
-                      <option key={shift.id} value={shift.id}>{shift.name}</option>
-                    ))}
+                    {shiftTemplates
+                      .filter((shift) => (assign.projectName ? (shift.projectName || '') === assign.projectName : true))
+                      .map((shift) => (
+                        <option key={shift.id} value={shift.id}>{shift.name}</option>
+                      ))}
                   </select>
                 </div>
 
@@ -639,6 +783,20 @@ export function Schedules() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">Project</label>
+                  <select 
+                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={assign.projectName}
+                    onChange={(e) => setAssign((a) => ({ ...a, projectName: e.target.value, shiftId: '' }))}
+                  >
+                    <option value="">Select project</option>
+                    {projectOptions.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Shift Template</label>
                   <select 
                     className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -646,9 +804,11 @@ export function Schedules() {
                     onChange={(e) => setAssign((a) => ({ ...a, shiftId: e.target.value }))}
                   >
                     <option value="">Select shift</option>
-                    {shiftTemplates.map((shift) => (
-                      <option key={shift.id} value={shift.id}>{shift.name}</option>
-                    ))}
+                    {shiftTemplates
+                      .filter((shift) => (assign.projectName ? (shift.projectName || '') === assign.projectName : true))
+                      .map((shift) => (
+                        <option key={shift.id} value={shift.id}>{shift.name}</option>
+                      ))}
                   </select>
                 </div>
 
@@ -686,6 +846,10 @@ export function Schedules() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Name</label>
                   <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Project Name</label>
+                  <Input value={form.projectName} onChange={(e) => setForm({ ...form, projectName: e.target.value })} placeholder="Optional" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">

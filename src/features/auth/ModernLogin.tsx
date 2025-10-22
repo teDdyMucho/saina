@@ -231,33 +231,85 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
       </AnimatePresence>
 
       {/* Main content */}
-      <div className="flex items-center justify-center min-h-screen p-4">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: "easeOut" }}
-          className="w-full max-w-[420px]"
-        >
-          {/* Glassmorphic card */}
-          <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-primary/20 p-8">
-            {/* Brand logo (no background) */}
-            
-
-            {/* Title */}
-            <div className="text-center mb-8">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Shift Time & Attendance Record
-              </p>
-            </div>
-
-            {inlineErrorMsg && (
-              <div className="mb-4">
-                <p className="text-center text-sm text-red-600 dark:text-red-400">{inlineErrorMsg}</p>
+      <div className="min-h-screen grid grid-cols-1 md:grid-cols-2">
+        {/* Left logo panel (hidden on mobile) */}
+        <div className="hidden md:flex items-center justify-center p-8">
+          <div className="relative w-full max-w-2xl">
+            <div className="absolute -top-10 -left-10 h-40 w-40 bg-secondary/20 blur-3xl rounded-full" />
+            <div className="absolute -bottom-10 -right-10 h-40 w-40 bg-primary/20 blur-3xl rounded-full" />
+            <div className="relative grid gap-6">
+              <div className="flex items-center gap-4">
+                <img src="/logo1.png" alt="Logo" className="h-16 w-auto object-contain drop-shadow" />
+                <div>
+                  <div className="text-3xl font-extrabold tracking-tight">STAR</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">Shift Time & Attendance Record</div>
+                </div>
               </div>
-            )}
 
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="flex flex-wrap gap-2">
+                <span className="px-3 py-1 rounded-full text-xs bg-white/70 dark:bg-slate-900/60 border border-white/40 dark:border-white/10">Realtime</span>
+                <span className="px-3 py-1 rounded-full text-xs bg-white/70 dark:bg-slate-900/60 border border-white/40 dark:border-white/10">Geofenced</span>
+                <span className="px-3 py-1 rounded-full text-xs bg-white/70 dark:bg-slate-900/60 border border-white/40 dark:border-white/10">Selfie Verified</span>
+                <span className="px-3 py-1 rounded-full text-xs bg-white/70 dark:bg-slate-900/60 border border-white/40 dark:border-white/10">Export Ready</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-lg p-5">
+                  <div className="text-sm font-semibold mb-1">Track Shifts</div>
+                  <p className="text-xs text-gray-600 dark:text-gray-300">Assign schedules by project and manage templates.</p>
+                </div>
+                <div className="rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-lg p-5">
+                  <div className="text-sm font-semibold mb-1">Clock In/Out</div>
+                  <p className="text-xs text-gray-600 dark:text-gray-300">Selfie capture and GPS for verified attendance.</p>
+                </div>
+                <div className="rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-lg p-5">
+                  <div className="text-sm font-semibold mb-1">Breaks</div>
+                  <p className="text-xs text-gray-600 dark:text-gray-300">Start and end breaks included in totals.</p>
+                </div>
+                <div className="rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-lg p-5">
+                  <div className="text-sm font-semibold mb-1">Reports</div>
+                  <p className="text-xs text-gray-600 dark:text-gray-300">Weekly Excel export by project and person.</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-lg p-5">
+                <div className="text-sm font-semibold mb-1">Why STAR?</div>
+                <p className="text-xs text-gray-600 dark:text-gray-300">Designed for field teams. Simple clocking, accurate schedules, and clear reporting—everything you need to run shifts smoothly.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right form panel */}
+        <div className="flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="w-full max-w-[420px]"
+          >
+            {/* Glassmorphic card */}
+            <div className="relative rounded-2xl bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-2xl shadow-primary/20 p-8">
+              {/* Brand logo (no background) */}
+              <div className="md:hidden flex items-center justify-center mb-6">
+                <img src="/logo1.png" alt="Logo" className="h-10 w-auto object-contain" />
+              </div>
+
+              {/* Title */}
+              <div className="text-center mb-8">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Shift Time & Attendance Record
+                </p>
+              </div>
+
+              {inlineErrorMsg && (
+                <div className="mb-4">
+                  <p className="text-center text-sm text-red-600 dark:text-red-400">{inlineErrorMsg}</p>
+                </div>
+              )}
+
+              {/* Form */}
+              <form onSubmit={handleSubmit} className="space-y-6">
               {/* Username input */}
               <div className="space-y-2">
                 <label 
@@ -405,9 +457,10 @@ export default function ModernLogin({ onAuth }: ModernLoginProps) {
               {/* Registration link removed: only admins can create accounts */}
 
               {/* SSO removed */}
-            </form>
-          </div>
-        </motion.div>
+              </form>
+            </div>
+          </motion.div>
+        </div>
       </div>
     </div>
   )

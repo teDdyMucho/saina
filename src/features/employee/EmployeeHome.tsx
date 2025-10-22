@@ -51,11 +51,11 @@ export function EmployeeHome() {
     }
   }, [])
 
-  // Load today's shift for logged-in user by username (fallback to full name)
+  // Load today's shift for logged-in user by user_name, then match template by shift_name + project
   useEffect(() => {
     const fetchToday = async () => {
       if (!user) return
-      const username = user.email // in our auth store, identifier holds username
+      let username = user.email
       const fullName = user.name
       const today = new Date()
       const yyyy = today.getFullYear()
@@ -63,11 +63,21 @@ export function EmployeeHome() {
       const dd = String(today.getDate()).padStart(2, '0')
       const todayStr = `${yyyy}-${mm}-${dd}`
 
-      // Find schedule where user_name matches username OR employee_name matches full name
+      // Resolve actual user_name from user table if present
+      try {
+        const { data: profile } = await supabase
+          .from('user')
+          .select('user_name')
+          .eq('name', fullName)
+          .maybeSingle()
+        if (profile?.user_name) username = profile.user_name
+      } catch {}
+
+      // Find schedules for this user_name
       const { data: schedules, error } = await supabase
         .from('schedule')
-        .select('id, shift_name, start_date, end_date, employee_name, user_name, created_at')
-        .or(`user_name.eq.${username},employee_name.eq.${fullName}`)
+        .select('id, shift_name, project, start_date, end_date, user_name, created_at')
+        .eq('user_name', username)
         .order('created_at', { ascending: false })
 
       if (error || !schedules || schedules.length === 0) return
@@ -81,10 +91,12 @@ export function EmployeeHome() {
 
       if (!active?.shift_name) return
 
+      // Match template by both shift_name and project
       const { data: tmpl } = await supabase
         .from('template')
-        .select('start_time, end_time, break_time, days')
+        .select('start_time, end_time, break_time, days, project')
         .eq('shift_name', active.shift_name)
+        .eq('project', active.project)
         .maybeSingle()
 
       if (tmpl) {
@@ -405,7 +417,7 @@ export function EmployeeHome() {
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-secondary to-secondary/80 flex items-center justify-center shadow-lg shadow-secondary/25">
                   <Briefcase className="w-5 h-5 text-white" />
                 </div>
-                <span className="text-xl">Today's Shift</span>
+                <span className="text-xl">{/pm\s*$/i.test(String(shift.startTime).trim()) ? "Tonight's Shift" : "Today's Shift"}</span>
               </CardTitle>
               <CardDescription className="ml-13">Be on time and within geofence</CardDescription>
             </CardHeader>

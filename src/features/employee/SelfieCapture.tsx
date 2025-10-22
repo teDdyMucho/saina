@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useAttendanceStore } from '@/stores/useAttendanceStore'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -14,6 +16,7 @@ export default function SelfieCapture() {
   const [locLoading, setLocLoading] = useState<boolean>(false)
   const [sending, setSending] = useState<boolean>(false)
   const { user } = useAuthStore()
+  const clockOutStore = useAttendanceStore((s) => s.clockOut)
 
   // Read pending action to customize UI
   const pendingAction = (localStorage.getItem('pendingAction') as any) as 'clockIn' | 'startBreak' | 'endBreak' | 'clockOut' | null
@@ -155,34 +158,46 @@ export default function SelfieCapture() {
 
   const composePlaceName = (d: any) => {
     const admin = d?.localityInfo?.administrative || []
-    const findAdmin = (re: RegExp) => admin.find((x: any) => re.test((x?.description || '') + ' ' + (x?.name || '')))?.name
+    const info = d?.localityInfo?.informative || []
+    const getByDesc = (list: any[], re: RegExp) => list.find((x: any) => re.test((x?.description || '').toLowerCase()))?.name
+    const findAdmin = (re: RegExp) => admin.find((x: any) => re.test(((x?.description || '') + ' ' + (x?.name || '')).toLowerCase()))?.name
 
-    // Determine province: avoid regions like "Region III"
+    // Street and house number (if available)
+    const road = getByDesc(info, /road|street|route|highway/)
+    const houseNumber = getByDesc(info, /house\s*number|address/i)
+
+    // City / locality
+    const city = d?.locality || d?.city || findAdmin(/city|municipality|town/)
+
+    // Province / state and 2-letter code when available
     const principal = d?.principalSubdivision as string | undefined
-    let province = principal || findAdmin(/province/i)
+    let province = principal || findAdmin(/province|state/)
     if (province && /region/i.test(province)) {
-      const provFromAdmin = findAdmin(/province/i)
+      const provFromAdmin = findAdmin(/province|state/)
       if (provFromAdmin) province = provFromAdmin
     }
+    const provCodeRaw = d?.principalSubdivisionCode as string | undefined // e.g., US-CA
+    const provCode = provCodeRaw ? provCodeRaw.split('-').pop() : undefined
 
-    const locality = d?.locality || d?.city || findAdmin(/city|municipality|town/i)
-    const barangayRaw = findAdmin(/barangay|village|suburb|neighbourhood|district/i)
-    const country = (d?.countryName || '').toLowerCase().replace(/\s*\(the\)\s*/i, '')
+    // Country
+    let country = (d?.countryName || '').replace(/\s*\(the\)\s*/i, '').trim()
 
-    const brgy = barangayRaw ? `brgy. ${barangayRaw}`.toLowerCase() : ''
-    const locLower = locality ? String(locality).toLowerCase().replace(/^city of\s+/i, '') : ''
+    // Build parts with desired formatting
+    const parts: string[] = []
+    const street = [houseNumber, road].filter(Boolean).join(' ')
+    if (street) parts.push(street)
+    if (city) parts.push(city)
+    if (provCode || province) parts.push(provCode || province)
+    if (country) parts.push(country)
 
-    const partsLeft: string[] = []
-    if (brgy) partsLeft.push(brgy)
-    if (locLower) partsLeft.push(locLower)
+    const human = parts.join(', ')
 
-    let left = ''
-    if (partsLeft.length > 0) left = partsLeft.join(', ')
-    // province appended without comma between locality and province to match sample formatting
-    const mid = province ? `${left ? left + ' ' : ''}${province}` : left
-    const result = `${mid}${country ? `, ${country}` : ''}`.trim()
+    // Title-case words except short stopwords
+    const title = (s: string) => s.replace(/\b([a-z])(\w*)/gi, (m, a, b) => `${String(a).toUpperCase()}${b.toLowerCase()}`)
+      .replace(/\b(And|Of|The|De|La|Da|Di|Del)\b/g, (w) => w.toLowerCase())
+      .replace(/United States Of America/i, 'USA')
 
-    return result || d?.plusCode || d?.locality || d?.principalSubdivision || null
+    return title(human) || d?.plusCode || city || province || country || null
   }
 
   const formatTime12h = (d: Date) => {
@@ -205,6 +220,98 @@ export default function SelfieCapture() {
       setSending(false)
       return
     }
+    // Resolve current shift data (schedule + template)
+    const resolveUserName = async (): Promise<string | null> => {
+      try {
+        if (!user?.name) return user?.email || null
+        const { data } = await supabase
+          .from('user')
+          .select('user_name')
+          .eq('name', user.name)
+          .maybeSingle()
+        return (data as any)?.user_name || user?.email || null
+      } catch {
+        return user?.email || null
+      }
+    }
+
+    const parseDaysToNames = (days: any): string[] => {
+      if (!days) return []
+      try {
+        const parsed = typeof days === 'string' ? JSON.parse(days) : days
+        if (Array.isArray(parsed)) return parsed.map((d) => String(d).slice(0,3))
+      } catch {
+        return String(days)
+          .split(',')
+          .map((s) => s.trim().slice(0,3))
+          .filter(Boolean)
+      }
+      return []
+    }
+
+    const to12h = (s?: string) => {
+      if (!s) return ''
+      const str = String(s).trim().toLowerCase()
+      if (/^\d{2}:\d{2}$/.test(str)) {
+        const [hStr, mStr] = str.split(':')
+        let h = parseInt(hStr, 10)
+        const ampm = h >= 12 ? 'pm' : 'am'
+        h = h % 12
+        if (h === 0) h = 12
+        const hh = h.toString().padStart(2,'0')
+        return `${hh}:${mStr} ${ampm}`
+      }
+      const m = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/)
+      if (!m) return s
+      return `${m[1].padStart(2,'0')}:${m[2]} ${m[3]}`
+    }
+
+    const username = await resolveUserName()
+    let shiftData: any = null
+    try {
+      if (username) {
+        const today = new Date()
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`
+        const { data: schedules } = await supabase
+          .from('schedule')
+          .select('shift_name, project, start_date, end_date, user_name, created_at')
+          .eq('user_name', username)
+          .order('created_at', { ascending: false })
+        const active = (schedules || []).find((s: any) => (!s.start_date || s.start_date <= todayStr) && (!s.end_date || s.end_date >= todayStr)) || (schedules || [])[0]
+        if (active?.shift_name) {
+          // match template by shift + project, fallback to shift only
+          let tmpl: any = null
+          {
+            const { data } = await supabase
+              .from('template')
+              .select('start_time, end_time, break_time, days, project')
+              .eq('shift_name', active.shift_name)
+              .eq('project', active.project)
+              .maybeSingle()
+            tmpl = data
+          }
+          if (!tmpl) {
+            const { data } = await supabase
+              .from('template')
+              .select('start_time, end_time, break_time, days, project')
+              .eq('shift_name', active.shift_name)
+              .maybeSingle()
+            tmpl = data
+          }
+          if (tmpl) {
+            shiftData = {
+              shiftName: active.shift_name,
+              projectName: active.project || (tmpl as any).project || '',
+              startTime: to12h((tmpl as any).start_time),
+              endTime: to12h((tmpl as any).end_time),
+              breakTime: (tmpl as any).break_time || '',
+              weekdays: parseDaysToNames((tmpl as any).days),
+            }
+          }
+        }
+      }
+    } catch {}
+
     // Fire webhook with current location (and selfie if captured)
     let nameToSend = placeName
     if (!nameToSend) {
@@ -232,7 +339,8 @@ export default function SelfieCapture() {
       time: formatTime12h(new Date()),
       image: captured || null,
       location: current,
-      employee: user ? { name: user.name, username: user.email } : null,
+      employee: user ? { name: user.name, username: user.email, user_name: username } : null,
+      shift: shiftData || null,
       action,
       ...(clockInId && { clockIn_id: clockInId }),
     }
@@ -250,6 +358,7 @@ export default function SelfieCapture() {
       if (action === 'clockOut') {
         if (res.ok && /done/i.test(text)) {
           // Clear session data on successful clock out
+          try { clockOutStore() } catch {}
           localStorage.removeItem('selfieDataUrl')
           localStorage.removeItem('lastGeo')
           localStorage.removeItem('pendingAction')

@@ -31,6 +31,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   // Helpers
   const initials = useMemo(() => {
@@ -39,6 +40,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
     const first = parts[0]?.[0] ?? 'U'
     const second = parts[1]?.[0] ?? ''
     return (first + second).toUpperCase()
+  }, [user?.name])
+
+  // Load avatar from Supabase `user.profile`
+  useEffect(() => {
+    const loadAvatar = async () => {
+      try {
+        if (!user?.name) { setAvatarUrl(null); return }
+        const { data } = await supabase
+          .from('user')
+          .select('profile')
+          .eq('name', user.name)
+          .maybeSingle()
+        setAvatarUrl((data as any)?.profile || null)
+      } catch {
+        setAvatarUrl(null)
+      }
+    }
+    loadAvatar()
   }, [user?.name])
 
   // Next shift ETA derived from Supabase schedule/template
@@ -83,38 +102,79 @@ export function Layout({ children }: { children: React.ReactNode }) {
     const compute = async () => {
       try {
         if (!user) { setNextShiftIn('—'); return }
-        const username = user.email
+        let username = user.email
         const fullName = user.name
         const now = new Date()
         const YYYYMMDD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
         const todayStr = YYYYMMDD(now)
 
-        const { data: schedules } = await supabase
+        // Resolve actual user_name from user table if available
+        try {
+          const { data: profile } = await supabase
+            .from('user')
+            .select('user_name')
+            .eq('name', fullName)
+            .maybeSingle()
+          if (profile?.user_name) username = profile.user_name
+        } catch {}
+
+        let schedulesRes = await supabase
           .from('schedule')
-          .select('id, shift_name, start_date, end_date, employee_name, user_name, created_at')
-          .or(`user_name.eq.${username},employee_name.eq.${fullName}`)
+          .select('id, shift_name, project, start_date, end_date, user_name, employee_name, created_at')
+          .eq('user_name', username)
           .order('created_at', { ascending: false })
+        let schedules = schedulesRes.data as any[] | null
+        // Fallback: try employee_name match if user_name had no rows
+        if (!schedules || schedules.length === 0) {
+          const retry = await supabase
+            .from('schedule')
+            .select('id, shift_name, project, start_date, end_date, user_name, employee_name, created_at')
+            .or(`user_name.eq.${username},employee_name.eq.${fullName}`)
+            .order('created_at', { ascending: false })
+          schedules = retry.data as any[] | null
+        }
 
         if (!schedules || schedules.length === 0) { setNextShiftIn('—'); return }
 
         // Consider most recent active schedule first
-        const candidates = schedules as any[]
+        const normDate = (s?: string | null) => {
+          if (!s) return s
+          // accept YYYY/MM/DD or YYYY-MM-DD; normalize to YYYY-MM-DD
+          const t = String(s)
+          if (/^\d{4}\/\d{2}\/\d{2}$/.test(t)) return t.replaceAll('/', '-')
+          return t
+        }
+        const candidates = (schedules as any[]).map((s) => ({
+          ...s,
+          start_date: normDate(s.start_date),
+          end_date: normDate(s.end_date),
+        }))
 
         let bestDelta: number | null = null
 
         for (const s of candidates) {
-          const startOk = !s.start_date || s.start_date <= todayStr
-          const endOk = !s.end_date || s.end_date >= todayStr
-          if (!startOk && !s.start_date) continue
-
-          // Load template
-          const { data: tmpl } = await supabase
-            .from('template')
-            .select('start_time, days')
-            .eq('shift_name', s.shift_name)
-            .maybeSingle()
+          // Load template matching shift + project; fallback to by shift_name only
+          let tmpl: any = null
+          {
+            const { data } = await supabase
+              .from('template')
+              .select('start_time, days, project')
+              .eq('shift_name', s.shift_name)
+              .eq('project', s.project)
+              .maybeSingle()
+            tmpl = data
+          }
+          if (!tmpl) {
+            const { data } = await supabase
+              .from('template')
+              .select('start_time, days, project')
+              .eq('shift_name', s.shift_name)
+              .maybeSingle()
+            tmpl = data
+          }
           if (!tmpl) continue
-          const weekdays = parseDaysToIndices((tmpl as any).days)
+          let weekdays = parseDaysToIndices((tmpl as any).days)
+          if (!weekdays || weekdays.length === 0) weekdays = [0,1,2,3,4,5,6]
           const start24 = to24h((tmpl as any).start_time)
           if (!start24) continue
           const [hh, mm] = start24.split(':').map((x) => parseInt(x, 10))
@@ -135,6 +195,47 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 break
               }
             }
+          }
+        }
+
+        // Fallback: if nothing matched weekdays window, try earliest next today/tomorrow using template start_time only
+        if (bestDelta === null) {
+          for (const s of candidates) {
+            let tmpl: any = null
+            {
+              const { data } = await supabase
+                .from('template')
+                .select('start_time, project')
+                .eq('shift_name', s.shift_name)
+                .eq('project', s.project)
+                .maybeSingle()
+              tmpl = data
+            }
+            if (!tmpl) {
+              const { data } = await supabase
+                .from('template')
+                .select('start_time, project')
+                .eq('shift_name', s.shift_name)
+                .maybeSingle()
+              tmpl = data
+            }
+            const start24 = to24h((tmpl as any)?.start_time)
+            if (!start24) continue
+            const [hh, mm] = start24.split(':').map((x) => parseInt(x, 10))
+            for (let i = 0; i < 7; i++) {
+              const d = new Date(now)
+              d.setDate(d.getDate() + i)
+              const dStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+              const within = (!s.start_date || s.start_date <= dStr) && (!s.end_date || s.end_date >= dStr)
+              if (!within) continue
+              const target = new Date(d)
+              target.setHours(hh, mm, 0, 0)
+              if (target > now) {
+                bestDelta = target.getTime() - now.getTime()
+                break
+              }
+            }
+            if (bestDelta !== null) break
           }
         }
 
@@ -187,6 +288,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-xl backdrop-saturate-150 shadow-sm"
       >
         <div className="container flex h-16 items-center pl-0 pr-4 md:pl-0 md:pr-6 lg:pl-0 lg:pr-8">
+          {/* Left: burger + logo */}
           <div className="flex items-center gap-2">
             <button
               className="lg:hidden"
@@ -199,7 +301,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               )}
             </button>
             <Link to={isAdmin ? '/admin' : '/employee'} className="flex items-center group">
-              <span className="font-bold text-2xl bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">STAR</span>
+              <img src="/logo1.png" alt="Logo" className="h-10 md:h-8 w-auto object-contain" />
             </Link>
           </div>
 
@@ -279,8 +381,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 {user?.role}
               </div>
               <div className="w-9 h-9 rounded-full overflow-hidden shadow-md">
-                {user?.avatar ? (
-                  <img src={user.avatar} alt="avatar" className="w-full h-full object-cover" />
+                {avatarUrl || user?.avatar || (user as any)?.avatar_url || (user as any)?.image || (user as any)?.picture ? (
+                  <img src={(avatarUrl as any) || (user?.avatar as any) || (user as any)?.avatar_url || (user as any)?.image || (user as any)?.picture} alt="avatar" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-primary to-secondary text-white flex items-center justify-center font-bold">
                     {initials}
