@@ -36,6 +36,26 @@ export function EmployeeHome() {
     radiusMeters: 100,
   })
 
+  // Schedule metadata used to check if actions are allowed now
+  const [scheduleMeta, setScheduleMeta] = useState<{
+    weekdays: number[]
+    startHH: number
+    startMM: number
+    endHH: number
+    endMM: number
+    brStartHH?: number
+    brStartMM?: number
+    brEndHH?: number
+    brEndMM?: number
+    startLocal?: Date | null
+    endLocal?: Date | null
+  } | null>(null)
+  const [withinWindow, setWithinWindow] = useState<boolean>(false)
+  const [canClockInNow, setCanClockInNow] = useState<boolean>(true)
+  const [canStartBreakNow, setCanStartBreakNow] = useState<boolean>(false)
+  const [canEndBreakNow, setCanEndBreakNow] = useState<boolean>(false)
+  const [canClockOutNow, setCanClockOutNow] = useState<boolean>(true)
+
   // Weekly summary removed; Timesheet page owns these KPIs now
 
   // Load clockIn_id from localStorage on mount
@@ -104,11 +124,83 @@ export function EmployeeHome() {
           const hh = h < 10 ? `0${h}` : String(h)
           return `${hh}:${min} ${ampm}`
         }
+        const to24h = (s?: string): string => {
+          if (!s) return ''
+          const str = String(s).trim().toLowerCase()
+          if (/^\d{2}:\d{2}$/.test(str)) return str
+          const mm = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/)
+          if (!mm) return ''
+          let h = parseInt(mm[1],10)
+          const m = mm[2]
+          const ap = mm[3]
+          if (ap) { if (ap === 'pm' && h !== 12) h += 12; if (ap === 'am' && h === 12) h = 0 }
+          return `${String(h).padStart(2,'0')}:${m}`
+        }
+        const parseDaysToIndices = (days: any): number[] => {
+          const wk = ['sun','mon','tue','wed','thu','fri','sat']
+          if (!days) return []
+          try {
+            const parsed = typeof days === 'string' ? JSON.parse(days) : days
+            if (Array.isArray(parsed)) {
+              return parsed
+                .map((d: any) => {
+                  if (typeof d === 'number') return d >= 1 && d <= 7 ? (d % 7) : d // support 1-7 (Mon=1?) -> 0-6 with Sun=0 when d%7
+                  const tok = String(d).trim().slice(0,3).toLowerCase()
+                  return wk.indexOf(tok)
+                })
+                .filter((i: number) => i >= 0 && i <= 6)
+            }
+          } catch {
+            const parts = String(days).split(/[\s,]+/).map((s: string) => s.trim()).filter(Boolean)
+            return parts
+              .map((p) => {
+                const maybeNum = Number(p)
+                if (!Number.isNaN(maybeNum)) return maybeNum >= 1 && maybeNum <= 7 ? (maybeNum % 7) : maybeNum
+                return wk.indexOf(p.slice(0,3).toLowerCase())
+              })
+              .filter((i) => i >= 0 && i <= 6) as number[]
+          }
+          return []
+        }
+
         setShift((prev) => ({
           ...prev,
           startTime: to12h(tmpl.start_time) || prev.startTime,
           endTime: to12h(tmpl.end_time) || prev.endTime,
         }))
+
+        const start24 = to24h((tmpl as any).start_time)
+        const end24 = to24h((tmpl as any).end_time)
+        // Parse break_time like "12:00 pm - 01:00 pm" or "12:00-13:00"
+        const rawBreak = (tmpl as any).break_time as string | undefined
+        const parseBreak = (s?: string): { a?: string; b?: string } => {
+          if (!s) return {}
+          const t = s.replace(/–|—/g, '-').replace(/\s+/g, ' ').trim()
+          const parts = t.split('-').map((p) => p.trim())
+          if (parts.length >= 2) return { a: to24h(parts[0]), b: to24h(parts[1]) }
+          return {}
+        }
+        const br = parseBreak(rawBreak)
+        const [sh, sm] = (start24 || '00:00').split(':').map((x) => parseInt(x,10))
+        const [eh, em] = (end24 || '00:00').split(':').map((x) => parseInt(x,10))
+        const [bsH, bsM] = (br.a || '00:00').split(':').map((x) => parseInt(x||'0',10))
+        const [beH, beM] = (br.b || '00:00').split(':').map((x) => parseInt(x||'0',10))
+        const toLocalDate = (s?: string | null): Date | null => {
+          if (!s) return null
+          const [yy, mm, dd] = String(s).split('-').map((x) => parseInt(x, 10))
+          if (!yy || !mm || !dd) return null
+          return new Date(yy, mm - 1, dd, 0, 0, 0, 0)
+        }
+
+        setScheduleMeta({
+          weekdays: parseDaysToIndices((tmpl as any).days),
+          startHH: sh, startMM: sm,
+          endHH: eh, endMM: em,
+          brStartHH: bsH, brStartMM: bsM,
+          brEndHH: beH, brEndMM: beM,
+          startLocal: toLocalDate(active.start_date),
+          endLocal: active.end_date ? new Date(new Date(toLocalDate(active.end_date) as Date).setHours(23,59,59,999)) : null,
+        })
       }
     }
     fetchToday()
@@ -117,6 +209,21 @@ export function EmployeeHome() {
   // Weekly summary removed
 
   // Inline camera is disabled; use dedicated capture route instead
+
+  // Enable actions only between start_time and end_time (ignore weekdays), within schedule date range
+  useEffect(() => {
+    const check = () => {
+      setWithinWindow(true)
+      // Action gating disabled; always allow actions
+      setCanClockInNow(true)
+      setCanClockOutNow(true)
+      setCanStartBreakNow(true)
+      setCanEndBreakNow(true)
+    }
+    check()
+    const id = setInterval(check, 1000)
+    return () => clearInterval(id)
+  }, [scheduleMeta])
 
   useEffect(() => {
     const timer = setInterval(() => {

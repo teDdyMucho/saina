@@ -196,6 +196,19 @@ export default function SelfieCapture() {
     return `${hh}:${mins} ${ampm}`
   }
 
+  const formatDateTimeSample = (d: Date) => {
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    const yyyy = d.getFullYear()
+    const mm = pad(d.getMonth() + 1)
+    const dd = pad(d.getDate())
+    let h = d.getHours()
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    h = h % 12
+    if (h === 0) h = 12
+    const mins = pad(d.getMinutes())
+    return `${yyyy}/${mm}/${dd} ${h}:${mins} ${ampm}`
+  }
+
   const saveAndClose = async () => {
     if (sending) return
     setSending(true)
@@ -230,6 +243,7 @@ export default function SelfieCapture() {
     const payload = {
       name: nameToSend || `${current.lat.toFixed(5)}, ${current.lng.toFixed(5)}`,
       time: formatTime12h(new Date()),
+      dateTime: formatDateTimeSample(new Date()),
       image: captured || null,
       location: current,
       employee: user ? { name: user.name, username: user.email } : null,

@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 interface TimesheetEntry {
   id: string
   date: string
+  dateDisplay: string
   clockIn: string
   clockOut: string | null
   workedMinutes: number
@@ -128,13 +129,26 @@ export function Timesheet() {
 
     const entries: TimesheetEntry[] = []
 
+    const toLocalYMD = (d: Date): string => {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+
     for (const record of clockInRecords) {
-      const inDateISO = new Date(record.created_at).toISOString().split('T')[0]
+      const inLocal = new Date(record.created_at)
+      const inDateISO = toLocalYMD(inLocal)
       const clockInTime = record.clockIn || formatTime(record.created_at)
 
       const entry: TimesheetEntry = {
         id: record.id?.toString() || record.clockIn_id,
         date: inDateISO,
+        dateDisplay: inLocal.toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'short',
+          day: 'numeric',
+        }),
         clockIn: clockInTime,
         clockOut: null,
         workedMinutes: 0,
@@ -159,8 +173,8 @@ export function Timesheet() {
         entry.clockOutLocation = candidate.location || null
 
         const inDt = parseTimeToDate(record.clockIn, inDateISO) || new Date(record.created_at)
-        // If clock out is on the next day, parse with that date
-        const outDateISO = new Date(candidate.created_at).toISOString().split('T')[0]
+        // If clock out is on the next day, parse with that date (local)
+        const outDateISO = toLocalYMD(new Date(candidate.created_at))
         const outDt = parseTimeToDate(candidate.clockOut, outDateISO) || new Date(candidate.created_at)
 
         if (inDt && outDt && outDt > inDt) {

@@ -292,8 +292,18 @@ export function Schedules() {
     })
   }
 
-  const deleteTemplate = (id: string) => {
+  const deleteTemplate = async (id: string) => {
+    const prev = shiftTemplates
+    // Optimistic UI
     setShiftTemplates((list) => list.filter((s) => s.id !== id))
+    // Delete from Supabase
+    const { error } = await supabase.from('template').delete().eq('id', id)
+    if (error) {
+      // Rollback UI on failure
+      setShiftTemplates(prev)
+      console.error('Failed to delete template:', error)
+      alert('Failed to delete template. Please try again.')
+    }
   }
 
   const toggleWeekday = (i: number) => {
@@ -306,17 +316,45 @@ export function Schedules() {
   const saveEdit = async (e: React.FormEvent) => {
     e.preventDefault()
     setTemplateMsg(null)
-    // Update UI state
-    setShiftTemplates((list) => {
-      const exists = list.some((s) => s.id === form.id)
-      if (exists) {
-        return list.map((s) => (s.id === form.id ? { ...s, ...form } : s))
-      }
-      return [...list, { ...form } as any]
-    })
-    // Send to webhook
+    // First persist to Supabase (update vs insert)
     setTemplateSubmitting(true)
     try {
+      if (isCreating) {
+        const { error } = await supabase
+          .from('template')
+          .insert({
+            id: form.id,
+            shift_name: form.name,
+            start_time: to12h(form.startTime),
+            end_time: to12h(form.endTime),
+            break_time: `${to12h(form.breakStart)} - ${to12h(form.breakEnd)}`,
+            days: JSON.stringify(form.weekdays.map((i) => weekdayNames[i])),
+          })
+        if (error) throw error
+      } else {
+        const { error } = await supabase
+          .from('template')
+          .update({
+            shift_name: form.name,
+            start_time: to12h(form.startTime),
+            end_time: to12h(form.endTime),
+            break_time: `${to12h(form.breakStart)} - ${to12h(form.breakEnd)}`,
+            days: JSON.stringify(form.weekdays.map((i) => weekdayNames[i])),
+          })
+          .eq('id', form.id)
+        if (error) throw error
+      }
+
+      // Update UI state locally without duplicating on edit
+      setShiftTemplates((list) => {
+        const exists = list.some((s) => s.id === form.id)
+        if (exists) {
+          return list.map((s) => (s.id === form.id ? { ...s, ...form } : s))
+        }
+        return [...list, { ...form } as any]
+      })
+
+      // Send to webhook (optional telemetry)
       const res = await fetch('https://primary-production-6722.up.railway.app/webhook/template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -334,6 +372,28 @@ export function Schedules() {
       const text = await res.text().catch(() => '')
       setTemplateMsg(res.ok ? 'Template saved' : `Failed to send: ${text || res.status}`)
       if (res.ok) {
+        // Reload from server to ensure sync
+        await (async () => {
+          const { data } = await supabase
+            .from('template')
+            .select('id, shift_name, start_time, end_time, break_time, days, created_at')
+          if (data) {
+            const mapped = data.map((row: any) => {
+              const weekdays: number[] = parseDaysToIndices(row.days)
+              const brk = parseBreakTo24h(row.break_time as string)
+              return {
+                id: String(row.id),
+                name: row.shift_name as string,
+                startTime: to24h(row.start_time as string) || '',
+                endTime: to24h(row.end_time as string) || '',
+                breakStart: brk.start,
+                breakEnd: brk.end,
+                weekdays,
+              }
+            })
+            setShiftTemplates(mapped)
+          }
+        })()
         setEditing(null)
         setIsCreating(false)
       }
@@ -684,7 +744,7 @@ export function Schedules() {
             <CardContent>
               <form onSubmit={saveEdit} className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Name</label>
+                  <label className="text-sm font-medium">Shift Name</label>
                   <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
                 </div>
                 <div className="grid grid-cols-2 gap-4">

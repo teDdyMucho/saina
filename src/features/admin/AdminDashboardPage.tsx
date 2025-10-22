@@ -175,6 +175,7 @@ export function AdminDashboardPage() {
           return Array.from({ length: 7 }, () => Math.max(0, base + Math.random() * variance - variance/2))
         }
         
+        // Restore all KPI cards
         setStats([
           { label: 'Present Today', value: present, delta: '+12% from yesterday', icon: Users, color: 'text-emerald-600', sparkline: generateSparkline(present, 8) },
           { label: 'Late Today', value: late, delta: late > 0 ? `${Math.round(late/present * 100)}% of present` : 'All on time!', icon: Clock, color: 'text-amber-600', sparkline: generateSparkline(late, 3) },
@@ -339,8 +340,7 @@ export function AdminDashboardPage() {
                       key={employee.id}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      whileHover={{ x: 5 }}
-                      className="group flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-2xl bg-muted/30 hover:bg-muted/50 hover:shadow-lg transition-all duration-300 gap-3 cursor-pointer"
+                      className="group flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-2xl bg-muted/30 transition-colors duration-300 gap-3"
                     >
                       <div className="flex items-center gap-4 min-w-0">
                         <motion.div 
@@ -392,26 +392,7 @@ export function AdminDashboardPage() {
                           )}
                         </div>
 
-                        {/* Quick Actions Dropdown */}
-                        <div className="relative group flex-shrink-0">
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreVertical className="w-4 h-4" />
-                          </Button>
-                          <div className="absolute right-0 top-full mt-1 w-40 bg-popover border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted rounded-t-lg">
-                              <User className="w-4 h-4" />
-                              View Profile
-                            </button>
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted">
-                              <MessageSquare className="w-4 h-4" />
-                              Message
-                            </button>
-                            <button className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted rounded-b-lg text-rose-600">
-                              <Flag className="w-4 h-4" />
-                              Flag
-                            </button>
-                          </div>
-                        </div>
+                        
                       </div>
                     </motion.div>
                   )
